@@ -1,11 +1,15 @@
 use crate::cbor::{self, DateTimeParseError, TAG_RRR_RECORD};
 use crate::crypto::encryption::EncryptionAlgorithm;
+use crate::crypto::kdf::KdfExt;
 use crate::crypto::password_hash::PasswordHash;
 use crate::crypto::signature::SigningKey;
 use crate::error::{Error, Result};
-use crate::registry::{Registry, RegistryConfigHash, WriteLock};
-use crate::segment::{FragmentKey, Segment, SegmentMetadata};
-use crate::serde_utils::{BytesOrAscii, Secret};
+use crate::registry::{Registry, RegistryConfigHash, RegistryConfigKdf, WriteLock};
+use crate::segment::{
+    FragmentEncryptionKeyBytes, FragmentFileNameBytes, FragmentKey, KdfUsage,
+    KdfUsageFragmentParameters, KdfUsageFragmentUsage, Segment, SegmentMetadata,
+};
+use crate::serde_utils::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
@@ -54,7 +58,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub type RecordName = Vec<u8>;
 
-#[derive(Clone, Default, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RecordKey {
     // TODO: Use / as a path separator, and escape / with //.
     pub record_name: RecordName,
@@ -63,25 +67,14 @@ pub struct RecordKey {
 
 impl RecordKey {
     pub fn hash_blocking(&self, hash_params: &RegistryConfigHash) -> Result<HashedRecordKey> {
-        let mut output_bytes = vec![0_u8; hash_params.hash_output_length_in_bytes()];
+        let mut output_bytes =
+            vec![0_u8; *hash_params.output_length_in_bytes as usize].into_boxed_slice();
         hash_params.algorithm.hash_password(
             &self.record_name,
             &self.predecessor_nonce,
             &mut output_bytes,
         )?;
-        let hashed_record_key = HashedRecordKey {
-            kdf_input_material: KdfInputMaterial(Secret(
-                output_bytes
-                    .drain(0..*hash_params.kdf_input_length_in_bytes as usize)
-                    .collect(),
-            )),
-            successor_nonce: SuccessionNonce(Secret(
-                output_bytes
-                    .drain(0..*hash_params.successor_nonce_length_in_bytes as usize)
-                    .collect(),
-            )),
-        };
-        assert!(output_bytes.is_empty(), "all output bytes must be consumed");
+        let hashed_record_key = HashedRecordKey(Secret(output_bytes));
         Ok(hashed_record_key)
     }
 
@@ -96,23 +89,6 @@ impl RecordKey {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct KdfInputMaterial(pub(crate) Secret<Box<[u8]>>);
-
-impl Deref for KdfInputMaterial {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for KdfInputMaterial {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-#[derive(Default, Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct SuccessionNonce(pub(crate) Secret<Box<[u8]>>);
 
 impl Deref for SuccessionNonce {
@@ -130,9 +106,102 @@ impl DerefMut for SuccessionNonce {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct HashedRecordKey {
-    pub kdf_input_material: KdfInputMaterial,
-    pub successor_nonce: SuccessionNonce,
+pub struct HashedRecordKey(pub(crate) Secret<Box<[u8]>>);
+
+impl Deref for HashedRecordKey {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for HashedRecordKey {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl HashedRecordKey {
+    pub(crate) fn derive_key_blocking(
+        &self,
+        usage: &KdfUsage,
+        kdf_params: &RegistryConfigKdf,
+        okm: &mut [u8],
+    ) -> Result<()> {
+        kdf_params
+            .algorithm
+            .derive_key_from_canonicalized_cbor(self, usage, okm)?;
+        Ok(())
+    }
+
+    pub(crate) async fn derive_key(
+        &self,
+        usage: &KdfUsage,
+        kdf_params: &RegistryConfigKdf,
+        okm: &mut [u8],
+    ) -> Result<()> {
+        let key = self.clone();
+        let usage = usage.clone();
+        let kdf_params = kdf_params.clone();
+        let okm_len = okm.len();
+        let received_okm = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+            let mut okm = vec![0_u8; okm_len];
+            key.derive_key_blocking(&usage, &kdf_params, &mut okm)
+                .map(move |()| okm)
+        })
+        .await??;
+
+        okm.copy_from_slice(&received_okm);
+
+        Ok(())
+    }
+
+    pub async fn derive_succession_nonce(
+        &self,
+        kdf_params: &RegistryConfigKdf,
+    ) -> Result<SuccessionNonce> {
+        let mut okm =
+            vec![0_u8; *kdf_params.succession_nonce_length_in_bytes as usize].into_boxed_slice();
+
+        self.derive_key(&KdfUsage::SuccessionNonce, kdf_params, &mut okm)
+            .await?;
+
+        Ok(SuccessionNonce(Secret(okm)))
+    }
+
+    pub async fn derive_fragment_file_name(
+        &self,
+        kdf_params: &RegistryConfigKdf,
+        fragment_parameters: &KdfUsageFragmentParameters,
+    ) -> Result<FragmentFileNameBytes> {
+        let mut okm = vec![0_u8; *kdf_params.file_name_length_in_bytes as usize].into_boxed_slice();
+        let usage = KdfUsage::Fragment {
+            usage: KdfUsageFragmentUsage::FileName,
+            parameters: fragment_parameters.clone(),
+        };
+
+        self.derive_key(&usage, kdf_params, &mut okm).await?;
+
+        Ok(FragmentFileNameBytes(BytesOrHexString(okm)))
+    }
+
+    pub async fn derive_fragment_encryption_key(
+        &self,
+        kdf_params: &RegistryConfigKdf,
+        encryption_alg: &EncryptionAlgorithm,
+        fragment_parameters: &KdfUsageFragmentParameters,
+    ) -> Result<FragmentEncryptionKeyBytes> {
+        let mut okm = vec![0_u8; encryption_alg.key_length_in_bytes()].into_boxed_slice();
+        let usage = KdfUsage::Fragment {
+            usage: KdfUsageFragmentUsage::EncryptionKey,
+            parameters: fragment_parameters.clone(),
+        };
+
+        self.derive_key(&usage, kdf_params, &mut okm).await?;
+
+        Ok(FragmentEncryptionKeyBytes(Secret(okm)))
+    }
 }
 
 /// A CBOR map of metadata.
@@ -262,13 +331,16 @@ impl Record {
             let mut data_buffer = Vec::<u8>::new();
 
             'segment_loop: loop {
-                let segment_key = FragmentKey {
-                    record_key_hash: hashed_key.kdf_input_material.clone(),
-                    record_version,
-                    record_nonce,
-                    segment_index,
+                let fragment_key = FragmentKey {
+                    hashed_record_key: hashed_key.clone(),
+                    fragment_parameters: KdfUsageFragmentParameters {
+                        record_version,
+                        record_nonce,
+                        segment_index,
+                    },
                 };
-                let fragment_file_name = segment_key.derive_file_name(&registry.config.kdf).await?;
+                let fragment_file_name =
+                    fragment_key.derive_file_name(&registry.config.kdf).await?;
                 let fragment_path = registry.get_fragment_path(&fragment_file_name);
 
                 let segment_result: Result<Segment> = try {
@@ -279,13 +351,13 @@ impl Record {
                         &registry.config.verifying_keys,
                         &registry.config.kdf,
                         fragment_file_guard,
-                        &segment_key,
+                        &fragment_key,
                     )
                     .await?
                 };
 
                 trace!(
-                    ?segment_key,
+                    ?fragment_key,
                     ?fragment_file_name,
                     ?fragment_path,
                     error = ?segment_result.as_ref().err(),
@@ -391,10 +463,12 @@ impl Record {
 
                 for segment_index in 0..segment_sizes.len() {
                     let fragment_key = FragmentKey {
-                        record_key_hash: hashed_key.kdf_input_material.clone(),
-                        record_version,
-                        record_nonce,
-                        segment_index: segment_index as u64,
+                        hashed_record_key: hashed_key.clone(),
+                        fragment_parameters: KdfUsageFragmentParameters {
+                            record_version,
+                            record_nonce,
+                            segment_index: segment_index as u64,
+                        },
                     };
                     let fragment_file_name =
                         fragment_key.derive_file_name(&registry.config.kdf).await?;

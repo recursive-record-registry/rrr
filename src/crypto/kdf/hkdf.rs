@@ -18,7 +18,7 @@ pub enum HkdfPrf {
 #[derive(Arbitrary, Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HkdfParams {
     /// Underlying pseudo-random function.
-    prf: HkdfPrf,
+    pub prf: HkdfPrf,
 }
 
 impl Kdf for HkdfParams {

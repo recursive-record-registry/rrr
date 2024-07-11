@@ -1,6 +1,6 @@
 use std::{fmt::Debug, ops::Deref};
 
-use crate::segment::EncryptionKeyBytes;
+use crate::segment::FragmentEncryptionKeyBytes;
 use aes_gcm::{
     aead::{Aead, Payload},
     Aes256Gcm, KeyInit,
@@ -61,7 +61,7 @@ impl From<EncryptionAlgorithm> for coset::Algorithm {
 
 pub(crate) struct Encrypt<'a> {
     pub algorithm: &'a EncryptionAlgorithm,
-    pub key: &'a EncryptionKeyBytes,
+    pub key: &'a FragmentEncryptionKeyBytes,
 }
 
 impl FnOnce<(&[u8], &[u8])> for Encrypt<'_> {
@@ -89,7 +89,7 @@ impl FnOnce<(&[u8], &[u8])> for Encrypt<'_> {
 
 pub(crate) struct Decrypt<'a> {
     pub algorithm: &'a EncryptionAlgorithm,
-    pub key: &'a EncryptionKeyBytes,
+    pub key: &'a FragmentEncryptionKeyBytes,
 }
 
 impl FnOnce<(&[u8], &[u8])> for Decrypt<'_> {

@@ -3,8 +3,8 @@ use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::{argon2::Argon2Params, PasswordHashAlgorithm};
 use crate::crypto::signature::{SigningKey, SigningKeyEd25519};
 use crate::registry::{
-    ConfigParam, KdfInputLengthInBytes, RegistryConfigHash, RegistryConfigKdf,
-    SuccessorNonceLengthInBytes,
+    ConfigParam, OutputLengthInBytes, RegistryConfigHash, RegistryConfigKdf,
+    SuccessionNonceLengthInBytes,
 };
 use crate::serde_utils::Secret;
 use crate::{crypto::encryption::EncryptionAlgorithm, record::RecordKey};
@@ -41,8 +41,11 @@ pub struct OwnedRegistryConfig {
 }
 
 impl OwnedRegistryConfig {
-    pub async fn get_root_record_key(&self) -> RecordKey {
-        Default::default()
+    pub fn get_root_record_key(&self) -> RecordKey {
+        RecordKey {
+            record_name: Vec::new(),
+            predecessor_nonce: self.kdf.get_root_record_predecessor_nonce(),
+        }
     }
 }
 
@@ -153,13 +156,12 @@ impl OwnedRegistry {
                 algorithm: PasswordHashAlgorithm::Argon2(
                     Argon2Params::default_with_random_pepper_of_recommended_length(&mut csprng),
                 ),
-                kdf_input_length_in_bytes: ConfigParam::<KdfInputLengthInBytes>::try_from(32)
-                    .unwrap(),
-                successor_nonce_length_in_bytes:
-                    ConfigParam::<SuccessorNonceLengthInBytes>::try_from(32).unwrap(),
+                output_length_in_bytes: ConfigParam::<OutputLengthInBytes>::try_from(32).unwrap(),
             },
             kdf: RegistryConfigKdf {
                 algorithm: KdfAlgorithm::Hkdf(HkdfParams::default()),
+                succession_nonce_length_in_bytes:
+                    ConfigParam::<SuccessionNonceLengthInBytes>::try_from(32).unwrap(),
                 file_name_length_in_bytes: ConfigParam::try_from(8).unwrap(),
             },
             encryption_algorithm: EncryptionAlgorithm::A256GCM,

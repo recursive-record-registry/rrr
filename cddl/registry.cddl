@@ -7,11 +7,11 @@ RRR_RegistryFile = #6.55799(#6.1381126723(RRR_Registry))
 RRR_Registry = {
     hash: {
         algorithm: RRR_HashingAlgorithm,
-        kdf_input_length_in_bytes: uint .ge 16,
-        successor_nonce_length_in_bytes: uint .ge 16,
+        output_length_in_bytes: uint .ge 16,
     },
     kdf: {
         algorithm: RRR_KdfAlgorithm,
+        succession_nonce_length_in_bytes: uint .ge 16,
         file_name_length_in_bytes: uint .ge 1,
     },
     ? verifying_keys: [ * RRR_VerifyingKey ],

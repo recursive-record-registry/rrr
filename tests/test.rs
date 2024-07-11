@@ -25,10 +25,14 @@ async fn hash_registry_path<L: std::fmt::Debug>(
     for record_name in record_names {
         let record_key = RecordKey {
             record_name: record_name.clone(),
-            predecessor_nonce: result
-                .last()
-                .map(|(_, hashed_key)| hashed_key.successor_nonce.clone())
-                .unwrap_or_else(|| registry.config.hash.get_root_record_predecessor_nonce()),
+            predecessor_nonce: if let Some((_, hashed_key)) = result.last() {
+                hashed_key
+                    .derive_succession_nonce(&registry.config.kdf)
+                    .await
+                    .unwrap()
+            } else {
+                registry.config.kdf.get_root_record_predecessor_nonce()
+            },
         };
         let hashed_record_key = record_key.hash(&registry.config.hash).await.unwrap();
         result.push((record_key, hashed_record_key));

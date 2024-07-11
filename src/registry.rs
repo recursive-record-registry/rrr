@@ -5,7 +5,7 @@ use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::owned::registry::OwnedRegistry;
 use crate::record::{HashedRecordKey, Record, SuccessionNonce};
-use crate::segment::FileNameBytes;
+use crate::segment::FragmentFileNameBytes;
 use crate::serde_utils::Secret;
 use async_fd_lock::{LockRead, LockWrite};
 use async_scoped::TokioScope;
@@ -209,38 +209,25 @@ macro_rules! define_config_params {
 }
 
 define_config_params! {
-    kdf_input_length_in_bytes: u64 = 32 >= 16,
-    successor_nonce_length_in_bytes: u64 = 32 >= 16,
+    output_length_in_bytes: u64 = 32 >= 16,
+    succession_nonce_length_in_bytes: u64 = 32 >= 16,
     file_name_length_in_bytes: u64 = 8 >= 1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigHash {
     pub algorithm: PasswordHashAlgorithm,
-    pub kdf_input_length_in_bytes: ConfigParam<KdfInputLengthInBytes>,
-    pub successor_nonce_length_in_bytes: ConfigParam<SuccessorNonceLengthInBytes>,
+    pub output_length_in_bytes: ConfigParam<OutputLengthInBytes>, // TODO/FIXME: Bad type name
 }
 
-impl RegistryConfigHash {
-    pub(crate) fn hash_output_length_in_bytes(&self) -> usize {
-        *self.kdf_input_length_in_bytes as usize + *self.successor_nonce_length_in_bytes as usize
-    }
-
-    pub fn get_root_record_predecessor_nonce(&self) -> SuccessionNonce {
-        // TODO: Replace with a configurable field
-        SuccessionNonce(Secret(
-            vec![0_u8; *self.successor_nonce_length_in_bytes as usize].into(),
-        ))
-    }
-}
+impl RegistryConfigHash {}
 
 prop_compose! {
     fn arb_registry_config_hash()(
         algorithm in any::<PasswordHashAlgorithm>(),
-        kdf_input_length_in_bytes in arb_config_param(128),
-        successor_nonce_length_in_bytes in arb_config_param(128),
+        output_length_in_bytes in arb_config_param(128),
     ) -> RegistryConfigHash {
-        RegistryConfigHash { algorithm, kdf_input_length_in_bytes, successor_nonce_length_in_bytes }
+        RegistryConfigHash { algorithm, output_length_in_bytes }
     }
 }
 
@@ -256,16 +243,26 @@ impl Arbitrary for RegistryConfigHash {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigKdf {
     pub algorithm: KdfAlgorithm,
-    /// File names are generated deterministically. Collisions in file names are expected.
+    pub succession_nonce_length_in_bytes: ConfigParam<SuccessionNonceLengthInBytes>,
     pub file_name_length_in_bytes: ConfigParam<FileNameLengthInBytes>,
+}
+
+impl RegistryConfigKdf {
+    pub fn get_root_record_predecessor_nonce(&self) -> SuccessionNonce {
+        // TODO: Replace with a configurable field
+        SuccessionNonce(Secret(
+            vec![0_u8; *self.succession_nonce_length_in_bytes as usize].into(),
+        ))
+    }
 }
 
 prop_compose! {
     fn arb_registry_config_kdf()(
         algorithm in any::<KdfAlgorithm>(),
+        succession_nonce_length_in_bytes in arb_config_param(128),
         file_name_length_in_bytes in arb_config_param(64),
     ) -> RegistryConfigKdf {
-        RegistryConfigKdf { algorithm, file_name_length_in_bytes }
+        RegistryConfigKdf { algorithm, succession_nonce_length_in_bytes, file_name_length_in_bytes }
     }
 }
 
@@ -447,7 +444,7 @@ impl<L: Debug> Registry<L> {
         Self::get_records_directory_from_registry_directory(&self.directory_path)
     }
 
-    pub fn get_fragment_path(&self, file_name_bytes: &FileNameBytes) -> PathBuf {
+    pub fn get_fragment_path(&self, file_name_bytes: &FragmentFileNameBytes) -> PathBuf {
         let mut path = self.get_records_directory();
         path.push(file_name_bytes.to_string());
         path

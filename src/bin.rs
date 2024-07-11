@@ -108,6 +108,10 @@ async fn main() -> color_eyre::Result<()> {
                 force,
             )
             .await?;
+            let root_predecessor_nonce = output_registry
+                .config
+                .kdf
+                .get_root_record_predecessor_nonce();
 
             // TODO: Verify target registry keys
 
@@ -115,7 +119,7 @@ async fn main() -> color_eyre::Result<()> {
                 &mut output_registry,
                 &input_registry,
                 &input_root_record,
-                &Default::default(),
+                &root_predecessor_nonce,
                 force,
             )
             .await?;

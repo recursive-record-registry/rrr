@@ -5,9 +5,15 @@ use aes_gcm::aead::OsRng;
 use criterion::Criterion;
 use criterion_macro::criterion;
 use rrr::{
-    crypto::password_hash::{argon2::Argon2Params, PasswordHashAlgorithm},
+    crypto::{
+        kdf::{
+            hkdf::{HkdfParams, HkdfPrf},
+            KdfAlgorithm,
+        },
+        password_hash::{argon2::Argon2Params, PasswordHashAlgorithm},
+    },
     record::{RecordKey, RecordName},
-    registry::{ConfigParam, RegistryConfigHash},
+    registry::{ConfigParam, RegistryConfigHash, RegistryConfigKdf},
 };
 use tokio::runtime::Runtime;
 
@@ -21,12 +27,18 @@ fn bench_hash_params(c: &mut Criterion) {
         algorithm: PasswordHashAlgorithm::Argon2(
             Argon2Params::default_with_random_pepper_of_recommended_length(OsRng),
         ),
-        kdf_input_length_in_bytes: ConfigParam::try_from(32).unwrap(),
-        successor_nonce_length_in_bytes: ConfigParam::try_from(32).unwrap(),
+        output_length_in_bytes: ConfigParam::try_from(32).unwrap(),
+    };
+    let kdf = RegistryConfigKdf {
+        algorithm: KdfAlgorithm::Hkdf(HkdfParams {
+            prf: HkdfPrf::Sha256,
+        }),
+        succession_nonce_length_in_bytes: ConfigParam::try_from(32).unwrap(),
+        file_name_length_in_bytes: ConfigParam::try_from(8).unwrap(),
     };
     let key = RecordKey {
         record_name: RecordName::from(b"hello"),
-        predecessor_nonce: hash.get_root_record_predecessor_nonce(),
+        predecessor_nonce: kdf.get_root_record_predecessor_nonce(),
     };
 
     c.bench_function("hash_params", |b| {

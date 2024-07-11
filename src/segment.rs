@@ -2,10 +2,9 @@ use crate::cbor::{
     self, HasHeadersExt, TAG_RRR_FRAGMENT, TAG_RRR_SEGMENT, TAG_SELF_DESCRIBED_CBOR,
 };
 use crate::crypto::encryption::{Decrypt, Encrypt, EncryptionAlgorithm};
-use crate::crypto::kdf::KdfExt;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
-use crate::record::{KdfInputMaterial, RecordKey};
+use crate::record::{HashedRecordKey, RecordKey};
 use crate::registry::RegistryConfigKdf;
 use crate::serde_utils::{BytesOrAscii, BytesOrHexString, Secret};
 use async_scoped::TokioScope;
@@ -60,98 +59,54 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct FragmentKey {
     /// The output of the slow password hashing function.
-    pub record_key_hash: KdfInputMaterial,
-    /// Records are versioned, so that updated versions of records can be published.
-    /// This field is used to ensure that encryption keys are unique for each version
-    /// of a published record. Publishing different versions of the same record with an equal
-    /// version number is a security violation.
-    pub record_version: u64,
-    /// Used to resolve collisions in file names. Starts at 0, and is incremented if a collision is
-    /// encountered for any of the record fragemnts. It is assumed that for each version of a
-    /// record, a single nonce is chosen. In other words, for a given record version, record fragments
-    /// with varying record nonces should **not** exist. This fact is used to optimize record
-    /// browsing, such that only the record with the lowest nonce is shown, and record fragments with
-    /// higher nonces are not even considered.
-    pub record_nonce: u64,
-    /// Records are made up of one or more segments/fragments. This number identifies a record's segments/fragments.
-    pub segment_index: u64,
+    pub hashed_record_key: HashedRecordKey,
+    pub fragment_parameters: KdfUsageFragmentParameters,
 }
 
 impl FragmentKey {
-    pub(crate) fn derive_key_blocking(
+    pub async fn derive_file_name(
         &self,
-        usage: KdfUsage,
         kdf_params: &RegistryConfigKdf,
-        okm: &mut [u8],
-    ) -> Result<()> {
-        let cbor = FragmentKeyInfo {
-            record_version: self.record_version,
-            record_nonce: self.record_nonce,
-            segment_index: self.segment_index,
-            usage,
-        };
-        kdf_params.algorithm.derive_key_from_canonicalized_cbor(
-            &self.record_key_hash,
-            cbor,
-            okm,
-        )?;
-        Ok(())
-    }
-
-    pub(crate) async fn derive_key(
-        &self,
-        usage: KdfUsage,
-        kdf_params: &RegistryConfigKdf,
-        okm: &mut [u8],
-    ) -> Result<()> {
-        let key = self.clone();
-        let kdf_params = kdf_params.clone();
-        let okm_len = okm.len();
-        let received_okm = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            let mut okm = vec![0_u8; okm_len];
-            key.derive_key_blocking(usage, &kdf_params, &mut okm)
-                .map(move |()| okm)
-        })
-        .await??;
-
-        okm.copy_from_slice(&received_okm);
-
-        Ok(())
-    }
-
-    pub async fn derive_file_name(&self, kdf_params: &RegistryConfigKdf) -> Result<FileNameBytes> {
-        let mut okm = vec![0_u8; *kdf_params.file_name_length_in_bytes as usize].into_boxed_slice();
-
-        self.derive_key(KdfUsage::SegmentName, kdf_params, &mut okm)
-            .await?;
-
-        Ok(FileNameBytes(BytesOrHexString(okm)))
+    ) -> Result<FragmentFileNameBytes> {
+        self.hashed_record_key
+            .derive_fragment_file_name(kdf_params, &self.fragment_parameters)
+            .await
     }
 
     pub async fn derive_encryption_key(
         &self,
         kdf_params: &RegistryConfigKdf,
-        encryption_alg: &EncryptionAlgorithm,
-    ) -> Result<EncryptionKeyBytes> {
-        let mut okm = vec![0_u8; encryption_alg.key_length_in_bytes()].into_boxed_slice();
-
-        self.derive_key(KdfUsage::SegmentName, kdf_params, &mut okm)
-            .await?;
-
-        Ok(EncryptionKeyBytes(Secret(okm)))
+        encryption_algorithm: &EncryptionAlgorithm,
+    ) -> Result<FragmentEncryptionKeyBytes> {
+        self.hashed_record_key
+            .derive_fragment_encryption_key(
+                kdf_params,
+                encryption_algorithm,
+                &self.fragment_parameters,
+            )
+            .await
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsage {
-    SegmentEncryptionKey,
-    SegmentName,
-    Custom(String),
+    SuccessionNonce,
+    Fragment {
+        usage: KdfUsageFragmentUsage,
+        parameters: KdfUsageFragmentParameters,
+    },
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct FragmentKeyInfo {
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum KdfUsageFragmentUsage {
+    EncryptionKey,
+    FileName,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+pub struct KdfUsageFragmentParameters {
     /// Records are versioned, so that updated versions of records can be published.
     /// This field is used to ensure that encryption keys are unique for each version
     /// of a published record. Publishing different versions of the same record with an equal
@@ -166,14 +121,12 @@ pub struct FragmentKeyInfo {
     pub record_nonce: u64,
     /// Records are made up of one or more segments/fragments. This number identifies a record's segments/fragments.
     pub segment_index: u64,
-    /// Defines what the output key material will be used for.
-    pub usage: KdfUsage,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct FileNameBytes(pub BytesOrHexString<Box<[u8]>>);
+pub struct FragmentFileNameBytes(pub BytesOrHexString<Box<[u8]>>);
 
-impl Deref for FileNameBytes {
+impl Deref for FragmentFileNameBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -181,22 +134,22 @@ impl Deref for FileNameBytes {
     }
 }
 
-impl DerefMut for FileNameBytes {
+impl DerefMut for FragmentFileNameBytes {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl Display for FileNameBytes {
+impl Display for FragmentFileNameBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:02x}.cbor", self.0.iter().format(""))
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct EncryptionKeyBytes(pub Secret<Box<[u8]>>);
+pub struct FragmentEncryptionKeyBytes(pub Secret<Box<[u8]>>);
 
-impl Deref for EncryptionKeyBytes {
+impl Deref for FragmentEncryptionKeyBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -204,15 +157,15 @@ impl Deref for EncryptionKeyBytes {
     }
 }
 
-impl DerefMut for EncryptionKeyBytes {
+impl DerefMut for FragmentEncryptionKeyBytes {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 pub struct HashedFragmentKey {
-    pub file_name: FileNameBytes,
-    pub encryption_key: EncryptionKeyBytes,
+    pub file_name: FragmentFileNameBytes,
+    pub encryption_key: FragmentEncryptionKeyBytes,
 }
 
 /// A CBOR map of metadata.
@@ -320,7 +273,7 @@ impl Segment {
         verifying_keys: &[VerifyingKey],
         kdf_params: &RegistryConfigKdf,
         mut read: impl AsyncRead + Unpin + Send,
-        key: &FragmentKey,
+        fragment_key: &FragmentKey,
     ) -> Result<Self> {
         let input_value = {
             let mut input_bytes = Vec::new();
@@ -347,9 +300,11 @@ impl Segment {
 
                 signed.ensure_no_critical_fields()?;
 
-                for key in verifying_keys {
+                for verifying_key in verifying_keys {
                     let verified = (0..signed.signatures.len()).any(|signature_index| {
-                        signed.verify_signature(signature_index, &[], key).is_ok()
+                        signed
+                            .verify_signature(signature_index, &[], verifying_key)
+                            .is_ok()
                     });
 
                     if !verified {
@@ -393,7 +348,7 @@ impl Segment {
                                 alg: Some(alg.clone()),
                             })
                     })?;
-                let encryption_key = key
+                let encryption_key = fragment_key
                     .derive_encryption_key(kdf_params, &encryption_algorithm)
                     .await?;
                 let plaintext = encrypted.decrypt(
@@ -422,7 +377,7 @@ impl Segment {
         signing_keys: &[SigningKey],
         kdf_params: &RegistryConfigKdf,
         write: impl AsyncWrite + Unpin + Send,
-        key: &FragmentKey,
+        fragment_key: &FragmentKey,
         encryption_algorithm: Option<&EncryptionAlgorithm>,
     ) -> Result<()> {
         let output_value = cbor::Value::serialized(self).map_err(Error::Cbor)?;
@@ -430,7 +385,7 @@ impl Segment {
         // Encrypt the fragment data, if an encryption algorithm was provided.
         let output_value = if let Some(encryption_algorithm) = encryption_algorithm {
             let plaintext = output_value.to_vec().map_err(Error::Coset)?;
-            let encryption_key = key
+            let encryption_key = fragment_key
                 .derive_encryption_key(kdf_params, encryption_algorithm)
                 .await?;
             let encrypted = coset::CoseEncrypt0Builder::new()
