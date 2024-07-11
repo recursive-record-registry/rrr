@@ -1,0 +1,86 @@
+;
+; Recursive Record Registry (RRR)
+;
+
+; An RRR file SHOULD be tagged with the Self-Described CBOR tag.
+RRR_Fragment = #6.55799(#6.1381126726(RRR_FragmentUntagged))
+
+; The slice of a record may be stored in plaintext, …
+RRR_FragmentUntagged /= bstr ; .cbor RRR_Segment -- verified with `segment.cddl`
+
+; … or be encrypted, …
+RRR_FragmentUntagged /= #6.16(
+    [
+        Headers,
+        ciphertext: bstr,  
+    ] .within COSE_Encrypt0
+) .within COSE_Encrypt0_Tagged
+
+; … and be cryptographically signed.
+RRR_FragmentUntagged /= #6.98(
+    [
+        Headers,
+        payload: bstr .cbor RRR_FragmentUntagged,
+        signatures: [+ COSE_Signature]
+    ] .within COSE_Sign
+) .within COSE_Sign_Tagged
+
+;
+; CBOR Object Signing and Encryption (COSE)
+; https://datatracker.ietf.org/doc/html/rfc8152
+;
+
+; 4.1. Signing with One or More Signers
+; https://datatracker.ietf.org/doc/html/rfc8152#section-4.1
+COSE_Sign_Tagged = #6.98(COSE_Sign)
+
+COSE_Sign = [
+    Headers,
+    payload : bstr / nil,
+    signatures : [+ COSE_Signature]
+]
+
+COSE_Signature =  [
+    Headers,
+    signature : bstr
+]
+
+; 5.2. Single Recipient Encrypted
+; https://datatracker.ietf.org/doc/html/rfc8152#section-5.2
+COSE_Encrypt0_Tagged = #6.16(COSE_Encrypt0)
+
+COSE_Encrypt0 = [
+    Headers,
+    ciphertext : bstr / nil,
+]
+
+; 3. Header Parameters
+; https://datatracker.ietf.org/doc/html/rfc8152#section-3
+Headers = (
+    protected : empty_or_serialized_map,
+    unprotected : header_map
+)
+
+empty_or_serialized_map = bstr .cbor header_map / bstr .size 0
+
+header_map = {
+    Generic_Headers,
+    * label => values
+}
+
+; 3.1. Common COSE Headers Parameters
+; https://datatracker.ietf.org/doc/html/rfc8152#section-3.1
+Generic_Headers = (
+    ? 1 => int / tstr,  ; algorithm identifier
+    ? 2 => [+label],    ; criticality
+    ? 3 => tstr / int,  ; content type
+    ? 4 => bstr,        ; key identifier
+    ? 5 => bstr,        ; IV
+    ? 6 => bstr,        ; Partial IV
+    ? 7 => COSE_Signature / [+COSE_Signature] ; Counter signature
+)
+
+; 1.4. CBOR-Related Terminology
+; https://datatracker.ietf.org/doc/html/rfc8152#section-1.4
+label = int / tstr
+values = any

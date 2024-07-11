@@ -1,0 +1,31 @@
+;
+; Recursive Record Registry (RRR)
+;
+
+; All concatenated segments of a record make up that record.
+
+RRR_Record = #6.1381126738([
+    RRR_RecordMetadata,
+    bstr  ; The content of the record.
+])
+
+RRR_RecordMetadata = {
+    RRR_RecordMetadataRegistered,
+    ; * label => values ; TODO lenient matching for input data
+}
+
+RRR_RecordMetadataRegistered = (
+    ? RRR_RecordMetadataRegistered_created_at ^=> tdate,  ; created at
+)
+
+RRR_RecordMetadataRegistered_created_at = 1
+
+;
+; CBOR Object Signing and Encryption (COSE)
+; https://datatracker.ietf.org/doc/html/rfc8152
+;
+
+; 1.4. CBOR-Related Terminology
+; https://datatracker.ietf.org/doc/html/rfc8152#section-1.4
+; label = int / tstr
+; values = any

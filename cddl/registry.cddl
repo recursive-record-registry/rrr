@@ -1,0 +1,84 @@
+;
+; Recursive Record Registry (RRR)
+;
+
+RRR_RegistryFile = #6.55799(#6.1381126723(RRR_Registry))
+
+RRR_Registry = {
+    hash: {
+        algorithm: RRR_HashingAlgorithm,
+        kdf_input_length_in_bytes: uint .ge 16,
+        successor_nonce_length_in_bytes: uint .ge 16,
+    },
+    kdf: {
+        algorithm: RRR_KdfAlgorithm,
+        file_name_length_in_bytes: uint .ge 1,
+    },
+    ? verifying_keys: [ * RRR_VerifyingKey ],
+}
+
+RRR_HashingAlgorithm = {
+    RRR_HashingAlgorithm_Argon2
+}
+
+RRR_HashingAlgorithm_Argon2 = (
+    argon2: {
+        variant: "argon2d" / "argon2i" / "argon2id",
+        ; Memory size in 1 KiB blocks. Between 8\*`p_cost` and (2^32)-1.
+        ; m_cost: 8...4294967296, ; Bug in cddl-rs' exclusive ranges
+        m_cost: 8..4294967295,
+        ; Number of iterations. Between 1 and (2^32)-1.
+        ; t_cost: 1...4294967296, ; Bug in cddl-rs' exclusive ranges
+        t_cost: 1..4294967295,
+        ; Degree of parallelism. Between 1 and (2^24)-1.
+        ; p_cost: 1...16777216, ; Bug in cddl-rs' exclusive ranges
+        p_cost: 1..16777215,
+        ? pepper: bstr / nil,
+    },
+)
+
+RRR_KdfAlgorithm = {
+    RRR_HashingAlgorithm_Hkdf
+}
+
+RRR_HashingAlgorithm_Hkdf = (
+    hkdf: {
+        prf: "sha256" / "sha512",
+    },
+)
+
+RRR_VerifyingKey = {
+    COSE_Key_kty ^=> COSE_Key_kty_OKP,
+    COSE_Key_alg ^=> COSE_Key_alg_EdDSA,
+    COSE_Key_crv ^=> COSE_Key_crv_Ed25519,
+    COSE_Key_x ^=> bstr .size 32,
+} .within COSE_Key
+
+COSE_Key_kty = 1
+COSE_Key_kty_OKP = 1
+COSE_Key_alg = 3
+COSE_Key_alg_EdDSA = -8
+COSE_Key_crv = -1
+COSE_Key_crv_Ed25519 = 6
+COSE_Key_x = -2
+
+;
+; CBOR Object Signing and Encryption (COSE)
+; https://datatracker.ietf.org/doc/html/rfc8152
+;
+
+; 7. Key Objects
+; https://datatracker.ietf.org/doc/html/rfc8152#section-7
+COSE_Key = {
+    1 => tstr / int,          ; kty
+    ? 2 => bstr,              ; kid
+    ? 3 => tstr / int,        ; alg
+    ? 4 => [+ (tstr / int) ], ; key_ops
+    ? 5 => bstr,              ; Base IV
+    * label => values
+}
+
+; 1.4. CBOR-Related Terminology
+; https://datatracker.ietf.org/doc/html/rfc8152#section-1.4
+label = int / tstr
+values = any

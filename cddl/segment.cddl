@@ -1,0 +1,31 @@
+;
+; Recursive Record Registry (RRR)
+;
+
+; The contents of a decrypted file is called a record segment.
+
+RRR_Segment = #6.1381126739([
+    RRR_SegmentMetadata,
+    bstr  ; A part of a CBOR byte string of an `RRR_Record`.
+])
+
+RRR_SegmentMetadata = {
+    RRR_SegmentMetadataRegistered,
+    ; * label => values ; TODO lenient matching for input data
+}
+
+RRR_SegmentMetadataRegistered = (
+    ? RRR_SegmentMetadataRegistered_last ^=> bool,
+)
+
+RRR_SegmentMetadataRegistered_last = 1  ; last -- This is the last segment of the record.
+
+;
+; CBOR Object Signing and Encryption (COSE)
+; https://datatracker.ietf.org/doc/html/rfc8152
+;
+
+; 1.4. CBOR-Related Terminology
+; https://datatracker.ietf.org/doc/html/rfc8152#section-1.4
+; label = int / tstr
+; values = any
