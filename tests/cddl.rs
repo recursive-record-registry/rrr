@@ -8,10 +8,10 @@ use cddl::{
 use coset::CborSerializable;
 use itertools::Itertools;
 use rrr::{
-    cbor::Value,
+    cbor::{SerializeExt, Value, ValueExt},
     crypto::encryption::EncryptionAlgorithm,
     record::{Record, RecordKey},
-    segment::{FragmentKey, KdfUsageFragmentParameters, Segment},
+    segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, Segment},
 };
 use std::{fs, path::Path};
 use test_strategy::proptest;
@@ -21,6 +21,7 @@ use util::RegistryConfigWithSigningKeys;
 mod util;
 
 #[test]
+#[traced_test]
 fn compile_cddl_files() -> Result<(), parser::Error> {
     let mut result = Ok(());
 
@@ -70,11 +71,13 @@ fn validate_with_cddl(cddl_path: impl AsRef<Path>, cbor: Value) {
 }
 
 #[proptest]
+#[traced_test]
 fn verify_cddl_record(record: Record) {
     validate_with_cddl("cddl/record.cddl", Value::serialized(&record).unwrap());
 }
 
 #[proptest]
+#[traced_test]
 fn verify_cddl_registry(config_with_signing_keys: RegistryConfigWithSigningKeys) {
     let RegistryConfigWithSigningKeys { config, .. } = config_with_signing_keys;
 
@@ -82,6 +85,7 @@ fn verify_cddl_registry(config_with_signing_keys: RegistryConfigWithSigningKeys)
 }
 
 #[proptest]
+#[traced_test]
 fn verify_cddl_segment(segment: Segment) {
     validate_with_cddl("cddl/segment.cddl", Value::serialized(&segment).unwrap());
 }
@@ -129,4 +133,13 @@ async fn verify_cddl_fragment(
         "cddl/fragment.cddl",
         Value::from_slice(&fragment_bytes).unwrap(),
     );
+}
+
+#[proptest(async = "tokio")]
+#[traced_test]
+async fn verify_cddl_kdf_usage(kdf_usage: KdfUsage) {
+    let cbor = kdf_usage.as_canonical_cbor_value().unwrap();
+
+    assert!(cbor.is_canonical(), "KDF usage is not in a canonical form");
+    validate_with_cddl("cddl/kdf_usage.cddl", cbor);
 }

@@ -49,6 +49,7 @@
 //!       form #6.55799(#MYTAG(_)), as per https://www.rfc-editor.org/rfc/rfc9277.html#section-2.2.1
 //!       See https://www.rfc-editor.org/rfc/rfc9277.html#name-the-cbor-protocol-specific- for
 //!       registration instructions.
+#![feature(array_windows)]
 #![feature(deref_patterns)]
 #![feature(fn_traits)]
 #![feature(try_blocks)]

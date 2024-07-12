@@ -88,24 +88,24 @@ impl FragmentKey {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsage {
-    SuccessionNonce,
+    SuccessionNonce {},
     Fragment {
         usage: KdfUsageFragmentUsage,
         parameters: KdfUsageFragmentParameters,
     },
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsageFragmentUsage {
     EncryptionKey,
     FileName,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
 pub struct KdfUsageFragmentParameters {
     /// Records are versioned, so that updated versions of records can be published.
     /// This field is used to ensure that encryption keys are unique for each version

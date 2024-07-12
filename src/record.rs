@@ -164,7 +164,7 @@ impl HashedRecordKey {
         let mut okm =
             vec![0_u8; *kdf_params.succession_nonce_length_in_bytes as usize].into_boxed_slice();
 
-        self.derive_key(&KdfUsage::SuccessionNonce, kdf_params, &mut okm)
+        self.derive_key(&KdfUsage::SuccessionNonce {}, kdf_params, &mut okm)
             .await?;
 
         Ok(SuccessionNonce(Secret(okm)))

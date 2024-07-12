@@ -139,6 +139,7 @@ async fn prop_registry(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn owned_registry() {
     let registry_dir = tempdir().unwrap();
 

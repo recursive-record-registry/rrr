@@ -322,30 +322,63 @@ pub(crate) mod iana {
 //     }
 // }
 
-pub fn canonicalize(value: &mut Value) {
-    match value {
-        Value::Integer(_) => (),
-        Value::Bytes(_) => (),
-        Value::Float(_) => (),
-        Value::Text(_) => (),
-        Value::Bool(_) => (),
-        Value::Null => (),
-        Value::Tag(_, deref!(value)) => canonicalize(value),
-        Value::Array(array) => {
-            for value in array.iter_mut() {
-                canonicalize(value);
-            }
-        }
-        Value::Map(map) => {
-            for (key, value) in map.iter_mut() {
-                canonicalize(key);
-                canonicalize(value);
-            }
+pub trait ValueExt {
+    fn canonicalize(&mut self);
+    fn is_canonical(&self) -> bool;
+}
 
-            map.sort_unstable_by_key(|(key, _)| CanonicalValue::from(key.clone()));
-            map.dedup_by(|(key_a, _), (key_b, _)| key_a == key_b);
+impl ValueExt for Value {
+    fn canonicalize(&mut self) {
+        match self {
+            Value::Integer(_) => (),
+            Value::Bytes(_) => (),
+            Value::Float(_) => (),
+            Value::Text(_) => (),
+            Value::Bool(_) => (),
+            Value::Null => (),
+            Value::Tag(_, deref!(value)) => value.canonicalize(),
+            Value::Array(array) => {
+                for value in array.iter_mut() {
+                    value.canonicalize();
+                }
+            }
+            Value::Map(map) => {
+                for (key, value) in map.iter_mut() {
+                    key.canonicalize();
+                    value.canonicalize();
+                }
+
+                // TODO: This clones on every comparison. Optimize.
+                map.sort_unstable_by_key(|(key, _)| CanonicalValue::from(key.clone()));
+                map.dedup_by(|(key_a, _), (key_b, _)| key_a == key_b);
+            }
+            _ => panic!("Unsupported CBOR type."),
         }
-        _ => panic!("Unsupported CBOR type."),
+    }
+
+    fn is_canonical(&self) -> bool {
+        match self {
+            Value::Integer(_) => true,
+            Value::Bytes(_) => true,
+            Value::Float(_) => true,
+            Value::Text(_) => true,
+            Value::Bool(_) => true,
+            Value::Null => true,
+            Value::Tag(_, deref!(value)) => value.is_canonical(),
+            Value::Array(array) => array.iter().all(Self::is_canonical),
+            Value::Map(map) => {
+                for [(a_key, _), (b_key, _)] in map.array_windows() {
+                    // Keys must be sorted and there must be no duplicates.
+                    // TODO: This clones on every comparison. Optimize.
+                    if CanonicalValue::from(a_key.clone()) >= CanonicalValue::from(b_key.clone()) {
+                        return false;
+                    }
+                }
+
+                map.iter().map(|(_, value)| value).all(Self::is_canonical)
+            }
+            _ => panic!("Unsupported CBOR type."),
+        }
     }
 }
 
@@ -358,8 +391,7 @@ impl<T: Serialize> SerializeAs<T> for AsCanonicalValue<T> {
     {
         let mut value = Value::serialized(source).map_err(serde::ser::Error::custom)?;
 
-        canonicalize(&mut value);
-
+        value.canonicalize();
         value.serialize(serializer)
     }
 }
@@ -373,7 +405,7 @@ impl<T: Serialize> SerializeExt for T {
     fn as_canonical_cbor_value(&self) -> Result<Value> {
         let mut value = Value::serialized(self).map_err(Error::Cbor)?;
 
-        canonicalize(&mut value);
+        value.canonicalize();
 
         Ok(value)
     }

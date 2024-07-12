@@ -1,0 +1,19 @@
+RRR_KdfUsage = {
+    ; RRR_KdfUsage_Fragment
+    RRR_KdfUsage_SuccessionNonce // RRR_KdfUsage_Fragment
+}
+
+RRR_KdfUsage_SuccessionNonce = (
+    succession_nonce: {},
+)
+
+RRR_KdfUsage_Fragment = (
+    fragment: {
+        usage: "encryption_key" / "file_name",
+        parameters: {
+            record_nonce: uint,
+            segment_index: uint,
+            record_version: uint,
+        },
+    },
+)
