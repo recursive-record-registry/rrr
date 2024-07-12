@@ -60,7 +60,6 @@ use coset::cbor::cbor;
 pub mod cbor;
 pub mod crypto;
 pub mod error;
-pub mod owned;
 pub mod record;
 pub mod registry;
 pub mod segment;

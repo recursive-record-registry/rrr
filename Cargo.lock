@@ -1981,6 +1981,7 @@ dependencies = [
  "derive_more",
  "ed25519-dalek",
  "futures",
+ "hex",
  "hex-buffer-serde",
  "hkdf",
  "indexmap 2.2.6",

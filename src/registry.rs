@@ -3,7 +3,6 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
-use crate::owned::registry::OwnedRegistry;
 use crate::record::{HashedRecordKey, Record, SuccessionNonce};
 use crate::segment::FragmentFileNameBytes;
 use crate::serde_utils::Secret;
@@ -372,16 +371,6 @@ impl RegistryConfig {
     }
 }
 
-impl From<&OwnedRegistry> for RegistryConfig {
-    fn from(owned: &OwnedRegistry) -> Self {
-        Self {
-            hash: owned.config.hash.clone(),
-            kdf: owned.config.kdf.clone(),
-            verifying_keys: owned.signing_keys.iter().map(Into::into).collect(),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct WriteLock {
     config_guard: async_fd_lock::RwLockWriteGuard<File>,
@@ -594,52 +583,3 @@ impl Registry<WriteLock> {
         })
     }
 }
-
-// impl<'record> From<&'record OwnedRegistry> for Registry<'record> {
-//     fn from(owned: &'record OwnedRegistry) -> Self {
-//         Self {
-//             root_record: Cow::Borrowed(&owned.root_record),
-//             kdf_algorithm: owned.kdf_algorithm.clone(),
-//             decryption_algorithm: owned.encryption_algorithm.clone(),
-//             verifying_keys: owned
-//                 .signing_keys
-//                 .iter()
-//                 .map(|SigningKey(key)| VerifyingKey(key.verifying_key()))
-//                 .collect(),
-//         }
-//     }
-// }
-
-// impl CborSerialize for Registry {
-//     fn try_into_cbor(&self) -> Result<cbor::Value> {
-//         let root_record = &self.root_record.try_into_cbor()?;
-//         let verifying_keys = cbor::Value::Array(
-//             self.verifying_keys
-//                 .iter()
-//                 .map(|verifying_key| {
-//                     CoseKeyBuilder::new_okp_key()
-//                         .param(
-//                             coset::iana::Ec2KeyParameter::Crv as i64,
-//                             coset::cbor::Value::from(coset::iana::EllipticCurve::Ed25519 as u64),
-//                         )
-//                         .param(
-//                             coset::iana::Ec2KeyParameter::X as i64,
-//                             coset::cbor::Value::Bytes(verifying_key.as_bytes().into()),
-//                         )
-//                         .build()
-//                         .to_cbor_value()
-//                         .map_err(Error::Coset)
-//                 })
-//                 .try_collect()?,
-//         );
-//         cbor!({
-//             "root_record" => root_record,
-//             "decryption_algorithm" => {
-//                 "iana" => coset::iana::Algorithm::A256GCM as i64,
-//                 "name" => "A256GCM",
-//             },
-//             "verifying_keys" => verifying_keys,
-//         })
-//         .map_err(Error::Cbor)
-//     }
-// }

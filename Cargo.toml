@@ -9,7 +9,7 @@ name = "rrr"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rrrmake"
+name = "rrr"
 path = "src/bin.rs"
 
 [dependencies]
@@ -28,6 +28,7 @@ coset = { version = "0.3.7", features = ["std"] }
 derive_more = "0.99.17"
 ed25519-dalek = { version = "2.1.1", features = ["rand_core", "pem"] }
 futures = "0.3.30"
+hex = "0.4.3"
 hex-buffer-serde = { version = "0.4.0", features = ["const_len"] }
 hkdf = { version = "0.12.4", features = ["std"] }
 indexmap = "2.2.6"

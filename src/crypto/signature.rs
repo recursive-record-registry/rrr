@@ -26,7 +26,7 @@ use crate::{
 };
 
 #[derive(Clone, PartialEq, Eq, Deref, DerefMut)]
-pub struct SigningKeyEd25519(pub(crate) ed25519_dalek::SigningKey);
+pub struct SigningKeyEd25519(pub ed25519_dalek::SigningKey);
 
 impl Zeroize for SigningKeyEd25519 {
     fn zeroize(&mut self) {

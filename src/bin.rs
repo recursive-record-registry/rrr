@@ -1,128 +1,121 @@
+#![feature(async_closure)]
+
 use std::path::PathBuf;
 
-use chrono::DateTime;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use color_eyre::Result;
+use futures::TryStreamExt;
 use rrr::{
-    crypto::encryption::EncryptionAlgorithm,
-    owned::{record::OwnedRecord, registry::OwnedRegistry},
-    record::{Record, RecordKey, RecordMetadata, SuccessionNonce},
-    registry::{Registry, RegistryConfig, WriteLock},
-    serde_utils::BytesOrAscii,
+    record::{HashedRecordKey, RecordKey},
+    registry::Registry,
 };
-use tokio::io::AsyncReadExt;
 
 #[derive(Parser)]
 #[command(version, about)]
+struct Args {
+    #[arg(short('d'), long, default_value = ".")]
+    pub registry_directory: PathBuf,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Parser, Clone)]
 enum Command {
-    /// Creates a new source registry.
-    New {
-        /// The directory in which to create a new source registry.
-        directory: PathBuf,
-        /// Force existing files to be overwritten.
-        #[arg(short, long, default_value = "false")]
-        force: bool,
-    },
-    /// Compiles a source registry into an RRR registry.
-    Make {
-        /// Path to a source registry.
-        #[arg(short, long, default_value = ".")]
-        input_directory: PathBuf,
-        /// Path to a directory in which to put RRR registry.
-        #[arg(short, long, default_value = "target")]
-        output_directory: PathBuf,
-        /// Force existing files to be overwritten.
-        #[arg(short, long, default_value = "false")]
-        force: bool,
+    Info {},
+    Read {
+        /// Enter record names in a hexadecimal format, instead of UTF-8.
+        #[arg(short('f'), long, value_enum, default_value_t = Default::default())]
+        record_name_format: RecordNameFormat,
+        #[arg(short('c'), long, value_enum, default_value = "4")]
+        max_collision_resolution_attempts: u64,
+        #[arg(short('r'), long, value_enum, default_value = "")]
+        root_record_name: String,
+        record_names: Vec<String>,
     },
 }
 
-async fn make_recursive(
-    output_registry: &mut Registry<WriteLock>,
-    input_registry: &OwnedRegistry,
-    input_record: &OwnedRecord,
-    predecessor_nonce: &SuccessionNonce,
-    force: bool,
-) -> color_eyre::Result<()> {
-    let mut data = Vec::new();
+#[derive(ValueEnum, Clone, Copy, Default)]
+enum RecordNameFormat {
+    #[default]
+    #[value(alias("utf-8"))]
+    Utf8,
+    #[value(alias("hex"))]
+    Hexadecimal,
+}
 
-    input_record
-        .read()
-        .await?
-        .expect("Data not found.")
-        .read_to_end(&mut data)
-        .await?;
+impl RecordNameFormat {
+    fn convert_record_name_to_bytes(&self, record_name: String) -> Result<Vec<u8>> {
+        match self {
+            RecordNameFormat::Utf8 => Ok(record_name.into_bytes()),
+            RecordNameFormat::Hexadecimal => Ok(hex::decode(record_name)?),
+        }
+    }
+}
 
-    let output_record = Record {
-        metadata: {
-            let mut metadata = RecordMetadata::default();
+async fn resolve_path<L>(
+    registry: &Registry<L>,
+    root_record_name: Vec<u8>,
+    record_names: Vec<Vec<u8>>,
+) -> color_eyre::Result<HashedRecordKey> {
+    let hashed_record_key_root = RecordKey {
+        record_name: root_record_name,
+        predecessor_nonce: registry.config.kdf.get_root_record_predecessor_nonce(),
+    }
+    .hash(&registry.config.hash)
+    .await?;
+    let predecessor_nonce = futures::stream::iter(record_names.into_iter().map(Ok))
+        .try_fold(
+            hashed_record_key_root,
+            async |hashed_record_key: HashedRecordKey, record_name| {
+                let predecessor_nonce = hashed_record_key
+                    .derive_succession_nonce(&registry.config.kdf)
+                    .await?;
+                let record_key = RecordKey {
+                    record_name,
+                    predecessor_nonce,
+                };
 
-            if let Some(created_at) = input_record.config.metadata.created_at.as_ref() {
-                let created_at_chrono = DateTime::parse_from_rfc3339(&created_at.to_string())?;
-
-                metadata.insert_created_at(created_at_chrono);
-            }
-
-            metadata
-        },
-        data: BytesOrAscii(data),
-    };
-    let key = RecordKey {
-        record_name: input_record.config.name.to_vec(),
-        predecessor_nonce: predecessor_nonce.clone(),
-    };
-    let hashed_key = key.hash(&input_registry.hash).await?;
-
-    output_registry
-        .save_record(
-            &input_registry.signing_keys,
-            &hashed_key,
-            &output_record,
-            0,                                   // TODO
-            0,                                   // TODO
-            &[],                                 // TODO
-            Some(&EncryptionAlgorithm::A256GCM), // TODO
-            force,
+                record_key.hash(&registry.config.hash).await
+            },
         )
         .await?;
 
-    Ok(())
+    Ok(predecessor_nonce)
 }
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    match Command::parse() {
-        Command::New { directory, force } => {
-            OwnedRegistry::generate(&directory, force).await.unwrap();
-            println!("New registry successfully generated in {directory:?}.");
+    let args = Args::parse();
+
+    match args.command {
+        Command::Info {} => {
+            let registry = Registry::open(args.registry_directory).await?;
+
+            println!("{registry:#?}");
         }
-        Command::Make {
-            input_directory,
-            output_directory,
-            force,
+        Command::Read {
+            record_name_format,
+            max_collision_resolution_attempts,
+            root_record_name,
+            record_names,
         } => {
-            let input_registry = OwnedRegistry::load(input_directory).await?;
-            let input_root_record = input_registry.load_root_record().await?;
-            let mut output_registry = Registry::create(
-                output_directory,
-                RegistryConfig::from(&input_registry),
-                force,
-            )
-            .await?;
-            let root_predecessor_nonce = output_registry
-                .config
-                .kdf
-                .get_root_record_predecessor_nonce();
+            let registry = Registry::open(args.registry_directory).await?;
+            let root_record_name =
+                record_name_format.convert_record_name_to_bytes(root_record_name)?;
+            let record_names = record_names
+                .into_iter()
+                .map(|record_name| record_name_format.convert_record_name_to_bytes(record_name))
+                .collect::<Result<Vec<_>, _>>()?;
+            let hashed_record_key = resolve_path(&registry, root_record_name, record_names).await?;
+            let record = registry
+                .load_record(
+                    &hashed_record_key,
+                    0, // TODO
+                    max_collision_resolution_attempts,
+                )
+                .await?;
 
-            // TODO: Verify target registry keys
-
-            make_recursive(
-                &mut output_registry,
-                &input_registry,
-                &input_root_record,
-                &root_predecessor_nonce,
-                force,
-            )
-            .await?;
+            println!("{record:#?}");
         }
     }
 

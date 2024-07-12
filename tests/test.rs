@@ -5,7 +5,6 @@ use proptest::prelude::*;
 use rrr::serde_utils::{BytesOrAscii, BytesOrHexString};
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,
-    owned::registry::OwnedRegistry,
     record::{HashedRecordKey, Record, RecordKey, RecordMetadata},
     registry::Registry,
 };
@@ -136,21 +135,6 @@ async fn prop_registry(
 
         assert_eq!(loaded_records, records);
     }
-}
-
-#[tokio::test]
-#[traced_test]
-async fn owned_registry() {
-    let registry_dir = tempdir().unwrap();
-
-    dbg!(&registry_dir);
-
-    let owned_registry = OwnedRegistry::generate(registry_dir.path(), false)
-        .await
-        .unwrap();
-    let owned_registry_loaded = OwnedRegistry::load(registry_dir.path()).await.unwrap();
-
-    assert_eq!(owned_registry_loaded, owned_registry);
 }
 
 // #[tokio::test]
