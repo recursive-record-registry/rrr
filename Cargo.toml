@@ -14,7 +14,7 @@ path = "src/bin.rs"
 required-features = ["cmd"]
 
 [features]
-cmd = ["clap", "color-eyre", "hex"]
+cmd = ["clap", "color-eyre", "hex", "tracing-error", "tracing-subscriber"]
 
 [dependencies]
 aes-gcm = { version = "0.10.3", features = ["std"] }
@@ -44,10 +44,12 @@ tokio = { version = "1.37", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["io-util"] }
 tracing = "0.1.40"
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
-# Dependencies for the executable binary
+# Dependencies of the executable binary
 clap = { version = "4.5", features = ["derive"], optional = true }
 color-eyre = { version = "0.6.3", optional = true }
 hex = { version = "0.4.3", optional = true }
+tracing-error = { version = "0.2.0", optional = true }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 cddl = "0.9.4"
