@@ -1,4 +1,4 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::borrow::Cow;
 
 use async_fd_lock::LockError;
 use coset::RegisteredLabel;
@@ -28,10 +28,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("Tokio Join: {0}")]
     Join(#[from] tokio::task::JoinError),
-    #[error("Duplicate successive record {name:?} of parent {parent:?}")]
-    DuplicateSuccessiveRecord { parent: PathBuf, name: Vec<u8> },
-    #[error("Registry already exists at path {path:?}")]
-    RegistryAlreadyExists { path: PathBuf },
     #[error("Unrecognized critical field in header: {field:?}")]
     UnrecognizedCriticalField {
         field: RegisteredLabel<coset::iana::HeaderParameter>,
