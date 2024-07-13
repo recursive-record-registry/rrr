@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use color_eyre::Result;
+use color_eyre::{eyre::OptionExt, Result};
 use futures::TryStreamExt;
 use rrr::{
     record::{HashedRecordKey, RecordKey},
@@ -28,8 +28,8 @@ enum Command {
         record_name_format: RecordNameFormat,
         #[arg(short('c'), long, value_enum, default_value = "4")]
         max_collision_resolution_attempts: u64,
-        #[arg(short('r'), long, value_enum, default_value = "")]
-        root_record_name: String,
+        #[arg(short('r'), long, value_enum, default_value = "false")]
+        no_prepend_root_record_name: bool,
         record_names: Vec<String>,
     },
 }
@@ -54,16 +54,18 @@ impl RecordNameFormat {
 
 async fn resolve_path<L>(
     registry: &Registry<L>,
-    root_record_name: Vec<u8>,
     record_names: Vec<Vec<u8>>,
 ) -> color_eyre::Result<HashedRecordKey> {
+    let mut record_names_iter = record_names.into_iter();
     let hashed_record_key_root = RecordKey {
-        record_name: root_record_name,
+        record_name: record_names_iter
+            .next()
+            .ok_or_eyre("No record name specified")?,
         predecessor_nonce: registry.config.kdf.get_root_record_predecessor_nonce(),
     }
     .hash(&registry.config.hash)
     .await?;
-    let predecessor_nonce = futures::stream::iter(record_names.into_iter().map(Ok))
+    let predecessor_nonce = futures::stream::iter(record_names_iter.map(Ok))
         .try_fold(
             hashed_record_key_root,
             async |hashed_record_key: HashedRecordKey, record_name| {
@@ -96,17 +98,24 @@ async fn main() -> color_eyre::Result<()> {
         Command::Read {
             record_name_format,
             max_collision_resolution_attempts,
-            root_record_name,
+            no_prepend_root_record_name,
             record_names,
         } => {
             let registry = Registry::open(args.registry_directory).await?;
-            let root_record_name =
-                record_name_format.convert_record_name_to_bytes(root_record_name)?;
-            let record_names = record_names
-                .into_iter()
-                .map(|record_name| record_name_format.convert_record_name_to_bytes(record_name))
-                .collect::<Result<Vec<_>, _>>()?;
-            let hashed_record_key = resolve_path(&registry, root_record_name, record_names).await?;
+            let record_names = {
+                let mut result = Vec::new();
+
+                if !no_prepend_root_record_name {
+                    result.push(Vec::new());
+                }
+
+                for record_name in record_names {
+                    result.push(record_name_format.convert_record_name_to_bytes(record_name)?);
+                }
+
+                result
+            };
+            let hashed_record_key = resolve_path(&registry, record_names).await?;
             let record = registry
                 .load_record(
                     &hashed_record_key,
