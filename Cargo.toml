@@ -11,6 +11,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "rrr"
 path = "src/bin.rs"
+required-features = ["cmd"]
+
+[features]
+cmd = ["clap", "color-eyre", "hex"]
 
 [dependencies]
 aes-gcm = { version = "0.10.3", features = ["std"] }
@@ -21,13 +25,10 @@ async-trait = "0.1.80"
 casey = "0.4.0"
 chrono = { version = "0.4", features = ["arbitrary"] }
 ciborium-io = { version = "^0.2.0", features = ["std"] }
-clap = { version = "4.5", features = ["derive"] }
-color-eyre = "0.6.3"
 coset = { version = "0.3.7", features = ["std"] }
 derive_more = "0.99.17"
 ed25519-dalek = { version = "2.1.1", features = ["rand_core", "pem"] }
 futures = "0.3.30"
-hex = "0.4.3"
 hex-buffer-serde = { version = "0.4.0", features = ["const_len"] }
 hkdf = { version = "0.12.4", features = ["std"] }
 indexmap = "2.2.6"
@@ -43,6 +44,10 @@ tokio = { version = "1.37", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["io-util"] }
 tracing = "0.1.40"
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
+# Dependencies for the executable binary
+clap = { version = "4.5", features = ["derive"], optional = true }
+color-eyre = { version = "0.6.3", optional = true }
+hex = { version = "0.4.3", optional = true }
 
 [dev-dependencies]
 cddl = "0.9.4"

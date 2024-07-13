@@ -50,6 +50,7 @@
 //!       See https://www.rfc-editor.org/rfc/rfc9277.html#name-the-cbor-protocol-specific- for
 //!       registration instructions.
 #![feature(array_windows)]
+#![feature(async_closure)]
 #![feature(deref_patterns)]
 #![feature(fn_traits)]
 #![feature(try_blocks)]
@@ -64,3 +65,6 @@ pub mod record;
 pub mod registry;
 pub mod segment;
 pub mod serde_utils;
+
+#[cfg(feature = "cmd")]
+pub mod cmd;
