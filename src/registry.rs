@@ -193,7 +193,7 @@ macro_rules! define_config_params {
         use stringify as Stringify;
 
         $(
-            static_assertions::const_assert!($min <= $recommended);
+            const _: () = const { assert!($min <= $recommended); };
             pascal!(pub struct $label;);
 
             impl ConfigParamTrait for pascal!($label) {

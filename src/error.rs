@@ -26,10 +26,6 @@ pub enum Error {
     UnexpectedItem(Cow<'static, str>),
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Toml Deserialization: {0}")]
-    TomlDe(#[from] toml::de::Error),
-    #[error("Toml Serialization: {0}")]
-    TomlSer(#[from] toml::ser::Error),
     #[error("Tokio Join: {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("Duplicate successive record {name:?} of parent {parent:?}")]
