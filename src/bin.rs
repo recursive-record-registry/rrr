@@ -2,52 +2,113 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
-use color_eyre::{eyre::OptionExt, Result};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use color_eyre::{
+    eyre::{bail, OptionExt},
+    Result,
+};
 use futures::TryStreamExt;
 use rrr::{
     record::{HashedRecordKey, RecordKey},
     registry::Registry,
 };
 
-#[derive(Parser)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about)]
-struct Args {
+struct RrrArgs {
+    /// The path to a registry directory containing a `registry.cbor` file.
+    /// By default, the current working directory is used.
     #[arg(short('d'), long, default_value = ".")]
     pub registry_directory: PathBuf,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: RrrCommand,
 }
 
-#[derive(Parser, Clone)]
-enum Command {
+#[derive(Subcommand, Debug, Clone)]
+enum RrrCommand {
+    /// Display information about the registry.
     Info {},
+    /// List versions of a record.
+    ListVersions {
+        #[command(flatten)]
+        record_args: RrrArgsRecordCommand,
+    },
+    /// Read the specified record version from the registry.
     Read {
-        /// Enter record names in a hexadecimal format, instead of UTF-8.
-        #[arg(short('f'), long, value_enum, default_value_t = Default::default())]
-        record_name_format: RecordNameFormat,
-        #[arg(short('c'), long, value_enum, default_value = "4")]
-        max_collision_resolution_attempts: u64,
-        #[arg(short('r'), long, value_enum, default_value = "false")]
-        no_prepend_root_record_name: bool,
-        record_names: Vec<String>,
+        // TODO: Option for the latest version, default.
+        /// The version of the record to open.
+        /// See [`ListVersions`].
+        #[arg(short('v'), long)]
+        record_version: u64,
+        #[command(flatten)]
+        record_args: RrrArgsRecordCommand,
     },
 }
 
-#[derive(ValueEnum, Clone, Copy, Default)]
+#[derive(Args, Debug, Clone)]
+struct RrrArgsRecordCommand {
+    /// How many attempts should be performed to resolve file name collisions.
+    /// A higher value may be necessary for registries with short fragment file names.
+    /// The default value of 4 is conservative for registries with fragment file names
+    /// of recommended length, it is perhaps even excessive.
+    #[arg(short('c'), long, value_enum, default_value = "4")]
+    max_collision_resolution_attempts: u64,
+    /// The format in which record names are specified.
+    #[arg(short('f'), long, value_enum, default_value_t = Default::default())]
+    record_name_format: RecordNameFormat,
+    /// Whether the default record name of the root record ("") should be prepended to `RECORD_NAMES`.
+    /// Enabling this makes it possible to replace the root record name with a custom value.
+    /// This is an advanced feature that should not be necessary to use in most cases.
+    #[arg(short('r'), long, value_enum, default_value = "false")]
+    no_prepend_root_record_name: bool,
+    /// A path to a record to read, made up of individual record names.
+    /// If no record names are specified, the root record is read.
+    record_names: Vec<String>,
+}
+
+impl RrrArgsRecordCommand {
+    async fn resolve_record_path<L>(&self, registry: &Registry<L>) -> Result<HashedRecordKey> {
+        let record_names = {
+            let mut result = Vec::new();
+
+            if !self.no_prepend_root_record_name {
+                result.push(Vec::new());
+            }
+
+            for record_name in &self.record_names {
+                result.push(
+                    self.record_name_format
+                        .convert_record_name_to_bytes(record_name)?,
+                );
+            }
+
+            result
+        };
+        let hashed_record_key = resolve_path(registry, record_names).await?;
+
+        Ok(hashed_record_key)
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Default, Debug)]
 enum RecordNameFormat {
+    /// UTF-8 strings.
+    /// Example: "password".
     #[default]
     #[value(alias("utf-8"))]
     Utf8,
+    /// Strings of hexadecimal digits, where 2 consecutive digits represent a single byte.
+    /// Alias: "hex".
+    /// Example: "70617373776f7264" (identical to "password" in UTF-8).
     #[value(alias("hex"))]
     Hexadecimal,
 }
 
 impl RecordNameFormat {
-    fn convert_record_name_to_bytes(&self, record_name: String) -> Result<Vec<u8>> {
+    fn convert_record_name_to_bytes(&self, record_name: impl AsRef<str>) -> Result<Vec<u8>> {
         match self {
-            RecordNameFormat::Utf8 => Ok(record_name.into_bytes()),
-            RecordNameFormat::Hexadecimal => Ok(hex::decode(record_name)?),
+            RecordNameFormat::Utf8 => Ok(record_name.as_ref().into()),
+            RecordNameFormat::Hexadecimal => Ok(hex::decode(record_name.as_ref())?),
         }
     }
 }
@@ -87,40 +148,31 @@ async fn resolve_path<L>(
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    let args = Args::parse();
+    let args = RrrArgs::parse();
 
     match args.command {
-        Command::Info {} => {
+        RrrCommand::Info {} => {
             let registry = Registry::open(args.registry_directory).await?;
 
             println!("{registry:#?}");
         }
-        Command::Read {
-            record_name_format,
-            max_collision_resolution_attempts,
-            no_prepend_root_record_name,
-            record_names,
+        RrrCommand::ListVersions { record_args } => {
+            let registry = Registry::open(args.registry_directory).await?;
+            let hashed_record_key = record_args.resolve_record_path(&registry).await?;
+
+            bail!("Not yet implemented");
+        }
+        RrrCommand::Read {
+            record_version,
+            record_args,
         } => {
             let registry = Registry::open(args.registry_directory).await?;
-            let record_names = {
-                let mut result = Vec::new();
-
-                if !no_prepend_root_record_name {
-                    result.push(Vec::new());
-                }
-
-                for record_name in record_names {
-                    result.push(record_name_format.convert_record_name_to_bytes(record_name)?);
-                }
-
-                result
-            };
-            let hashed_record_key = resolve_path(&registry, record_names).await?;
+            let hashed_record_key = record_args.resolve_record_path(&registry).await?;
             let record = registry
                 .load_record(
                     &hashed_record_key,
-                    0, // TODO
-                    max_collision_resolution_attempts,
+                    record_version,
+                    record_args.max_collision_resolution_attempts,
                 )
                 .await?;
 
@@ -134,5 +186,5 @@ async fn main() -> color_eyre::Result<()> {
 #[test]
 fn verify_cli() {
     use clap::CommandFactory;
-    Command::command().debug_assert();
+    RrrArgs::command().debug_assert();
 }
