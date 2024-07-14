@@ -240,11 +240,22 @@ impl Arbitrary for RegistryConfigHash {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct RegistryConfigKdfBuilder {
     algorithm: Option<KdfAlgorithm>,
-    file_name_length_in_bytes: Option<<FileNameLengthInBytes as ConfigParamTrait>::T>,
-    succession_nonce_length_in_bytes: Option<<SuccessionNonceLengthInBytes as ConfigParamTrait>::T>,
+    file_name_length_in_bytes: <FileNameLengthInBytes as ConfigParamTrait>::T,
+    succession_nonce_length_in_bytes: <SuccessionNonceLengthInBytes as ConfigParamTrait>::T,
+}
+
+impl Default for RegistryConfigKdfBuilder {
+    fn default() -> Self {
+        Self {
+            algorithm: Default::default(),
+            file_name_length_in_bytes: <FileNameLengthInBytes as ConfigParamTrait>::RECOMMENDED,
+            succession_nonce_length_in_bytes:
+                <SuccessionNonceLengthInBytes as ConfigParamTrait>::RECOMMENDED,
+        }
+    }
 }
 
 impl RegistryConfigKdfBuilder {
@@ -257,7 +268,7 @@ impl RegistryConfigKdfBuilder {
         &mut self,
         file_name_length_in_bytes: <FileNameLengthInBytes as ConfigParamTrait>::T,
     ) -> &mut Self {
-        self.file_name_length_in_bytes = Some(file_name_length_in_bytes);
+        self.file_name_length_in_bytes = file_name_length_in_bytes;
         self
     }
 
@@ -265,7 +276,7 @@ impl RegistryConfigKdfBuilder {
         &mut self,
         succession_nonce_length_in_bytes: <SuccessionNonceLengthInBytes as ConfigParamTrait>::T,
     ) -> &mut Self {
-        self.succession_nonce_length_in_bytes = Some(succession_nonce_length_in_bytes);
+        self.succession_nonce_length_in_bytes = succession_nonce_length_in_bytes;
         self
     }
 
@@ -274,16 +285,11 @@ impl RegistryConfigKdfBuilder {
         mut csprng: impl RngCore + CryptoRng,
     ) -> Result<RegistryConfigKdf> {
         let algorithm = self.algorithm.unwrap_builder_parameter("algorithm")?;
-        let file_name_length_in_bytes = ConfigParam::try_from(
-            self.file_name_length_in_bytes
-                .unwrap_builder_parameter("file_name_length_in_bytes")?,
-        )
-        .map_err(InvalidParameterError::from)?;
-        let succession_nonce_length_in_bytes = ConfigParam::try_from(
-            self.succession_nonce_length_in_bytes
-                .unwrap_builder_parameter("succession_nonce_length_in_bytes")?,
-        )
-        .map_err(InvalidParameterError::from)?;
+        let file_name_length_in_bytes = ConfigParam::try_from(self.file_name_length_in_bytes)
+            .map_err(InvalidParameterError::from)?;
+        let succession_nonce_length_in_bytes =
+            ConfigParam::try_from(self.succession_nonce_length_in_bytes)
+                .map_err(InvalidParameterError::from)?;
         Ok(RegistryConfigKdf {
             root_predecessor_nonce: {
                 let mut bytes =
