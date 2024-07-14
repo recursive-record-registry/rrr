@@ -6,7 +6,7 @@ use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
 use crate::registry::RegistryConfigKdf;
-use crate::serde_utils::{BytesOrAscii, BytesOrHexString, Secret};
+use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_scoped::TokioScope;
 use coset::cbor::tag;
 use coset::TaggedCborSerializable;
@@ -107,20 +107,51 @@ pub enum KdfUsageFragmentUsage {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
 pub struct KdfUsageFragmentParameters {
-    /// Records are versioned, so that updated versions of records can be published.
-    /// This field is used to ensure that encryption keys are unique for each version
-    /// of a published record. Publishing different versions of the same record with an equal
-    /// version number is a security violation.
-    pub record_version: u64,
-    /// Used to resolve collisions in file names. Starts at 0, and is incremented if a collision is
-    /// encountered for any of the record fragemnts. It is assumed that for each version of a
-    /// record, a single nonce is chosen. In other words, for a given record version, record fragments
-    /// with varying record nonces should **not** exist. This fact is used to optimize record
-    /// browsing, such that only the record with the lowest nonce is shown, and record fragments with
-    /// higher nonces are not even considered.
-    pub record_nonce: u64,
-    /// Records are made up of one or more segments/fragments. This number identifies a record's segments/fragments.
-    pub segment_index: u64,
+    // Flattens fields of `RecordParameters` with the prefix `record_` prepended to each field.
+    #[serde(flatten, with = "prefix_record")]
+    pub record_parameters: RecordParameters,
+    pub segment_index: SegmentIndex,
+}
+
+serde_with::with_prefix!(prefix_record "record_");
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
+pub struct RecordParameters {
+    pub version: RecordVersion,
+    pub nonce: RecordNonce,
+}
+
+newtype! {
+    #[doc = "
+        Records are made up of one or more segments/fragments.
+        This number identifies a record's segments/fragments.
+    "]
+    #[derive(Debug, Arbitrary)]
+    pub SegmentIndex(pub u64);
+}
+
+newtype! {
+    #[doc = "
+        Records are versioned, so that updated versions of records can be published.
+        This field is used to ensure that encryption keys are unique for each version
+        of a published record. Publishing different versions of the same record with an equal
+        version number is a security violation.
+    "]
+    #[derive(Debug, Arbitrary)]
+    pub RecordVersion(pub u64);
+}
+
+newtype! {
+    #[doc = "
+        Used to resolve collisions in file names. Starts at 0, and is incremented if a collision is
+        encountered for any of the record fragemnts. It is assumed that for each version of a
+        record, a single nonce is chosen. In other words, for a given record version, record fragments
+        with varying record nonces should **not** exist. This fact is used to optimize record
+        browsing, such that only the record with the lowest nonce is shown, and record fragments with
+        higher nonces are not even considered.
+    "]
+    #[derive(Debug, Arbitrary)]
+    pub RecordNonce(pub u64);
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]

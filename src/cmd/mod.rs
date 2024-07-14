@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    record::{HashedRecordKey, RecordKey},
+    record::{HashedRecordKey, RecordKey, RecordName},
     registry::Registry,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -70,7 +70,7 @@ impl RrrArgsRecordCommand {
             let mut result = Vec::new();
 
             if !self.no_prepend_root_record_name {
-                result.push(Vec::new());
+                result.push(Default::default());
             }
 
             for record_name in &self.record_names {
@@ -103,17 +103,19 @@ pub enum RecordNameFormat {
 }
 
 impl RecordNameFormat {
-    fn convert_record_name_to_bytes(&self, record_name: impl AsRef<str>) -> Result<Vec<u8>> {
+    fn convert_record_name_to_bytes(&self, record_name: impl AsRef<str>) -> Result<RecordName> {
         match self {
-            RecordNameFormat::Utf8 => Ok(record_name.as_ref().into()),
-            RecordNameFormat::Hexadecimal => Ok(hex::decode(record_name.as_ref())?),
+            RecordNameFormat::Utf8 => Ok(RecordName::from(Vec::from(record_name.as_ref()))),
+            RecordNameFormat::Hexadecimal => {
+                Ok(RecordName::from(hex::decode(record_name.as_ref())?))
+            }
         }
     }
 }
 
 async fn resolve_path<L>(
     registry: &Registry<L>,
-    record_names: Vec<Vec<u8>>,
+    record_names: Vec<RecordName>,
 ) -> color_eyre::Result<HashedRecordKey> {
     let mut record_names_iter = record_names.into_iter();
     let hashed_record_key_root = RecordKey {
@@ -167,7 +169,7 @@ impl RrrArgs {
                 let record = registry
                     .load_record(
                         &hashed_record_key,
-                        record_version,
+                        record_version.into(),
                         record_args.max_collision_resolution_attempts,
                     )
                     .await?;

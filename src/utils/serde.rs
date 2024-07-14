@@ -26,7 +26,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// use serde::{Serialize, Deserialize};
 /// use serde_with::serde_as;
 /// use hex_buffer_serde::Hex;
-/// use rrr::serde_utils::BytesOrHexStringOf;
+/// use rrr::utils::serde::BytesOrHexStringOf;
 ///
 /// pub struct OurBuffer(Vec<u8>);
 ///
@@ -96,7 +96,7 @@ where
 }
 
 #[derive(
-    Clone, Serialize, Deserialize, Deref, DerefMut, Default, PartialEq, Eq, PartialOrd, Ord, Zeroize,
+    Clone, Serialize, Deserialize, Deref, DerefMut, PartialEq, Eq, PartialOrd, Ord, Zeroize,
 )]
 #[serde(transparent)]
 pub struct BytesOrHexString<T, E = <T as TryFrom<&'static [u8]>>::Error>(
@@ -156,6 +156,16 @@ where
     }
 }
 
+impl<T, E> Default for BytesOrHexString<T, E>
+where
+    T: AsRef<[u8]> + for<'a> TryFrom<&'a [u8], Error = E> + Default,
+    E: std::fmt::Display,
+{
+    fn default() -> Self {
+        Self(T::default())
+    }
+}
+
 impl<T, E> Arbitrary for BytesOrHexString<T, E>
 where
     T: AsRef<[u8]> + for<'a> TryFrom<&'a [u8], Error = E> + Arbitrary,
@@ -180,7 +190,7 @@ where
 /// use serde::{Serialize, Deserialize};
 /// use serde_with::serde_as;
 /// use hex_buffer_serde::ConstHex;
-/// use rrr::serde_utils::ConstBytesOrHexStringOf;
+/// use rrr::utils::serde::ConstBytesOrHexStringOf;
 ///
 /// pub struct OurBuffer([u8; 8]);
 ///

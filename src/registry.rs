@@ -3,9 +3,9 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
-use crate::record::{HashedRecordKey, Record, SuccessionNonce};
-use crate::segment::FragmentFileNameBytes;
-use crate::serde_utils::Secret;
+use crate::record::{HashedRecordKey, Record, RecordReadVersionResult, SuccessionNonce};
+use crate::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
+use crate::utils::serde::Secret;
 use async_fd_lock::{LockRead, LockWrite};
 use async_scoped::TokioScope;
 use proptest::arbitrary::{any, Arbitrary};
@@ -441,10 +441,11 @@ impl<L: Debug> Registry<L> {
 
     pub async fn load_record(
         &self,
+        // TODO: Make it possible to pass in a non-hashed record key
         hashed_key: &HashedRecordKey,
-        record_version: u64,
+        record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
-    ) -> Result<Option<Record>> {
+    ) -> Result<Option<RecordReadVersionResult>> {
         Record::read_version(
             self,
             hashed_key,
@@ -533,14 +534,15 @@ impl Registry<WriteLock> {
     pub async fn save_record(
         &mut self,
         signing_keys: &[SigningKey],
+        // TODO: Make it possible to pass in a non-hashed record key
         hashed_key: &HashedRecordKey,
         record: &Record,
-        record_version: u64,
+        record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
         split_at: &[usize],
         encryption_algorithm: Option<&EncryptionAlgorithm>,
         overwrite: bool,
-    ) -> Result<()> {
+    ) -> Result<RecordNonce> {
         let open_options = {
             let mut open_options = tokio::fs::OpenOptions::new();
             open_options.create_new(!overwrite);
@@ -562,9 +564,7 @@ impl Registry<WriteLock> {
                 encryption_algorithm,
                 &open_options,
             )
-            .await?;
-
-        Ok(())
+            .await
     }
 
     pub async fn lock_read(self) -> Result<Registry<ReadLock>> {

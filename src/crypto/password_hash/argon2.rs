@@ -1,4 +1,4 @@
-use crate::serde_utils::{BytesOrHexString, Secret};
+use crate::utils::serde::{BytesOrHexString, Secret};
 use proptest::{
     arbitrary::{any, Arbitrary},
     prop_compose,

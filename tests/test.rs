@@ -1,8 +1,13 @@
 use aes_gcm::aead::{rand_core::RngCore, OsRng};
 use chrono::{Duration, Utc};
-use prop::{array, collection::vec};
+use futures::future::BoxFuture;
+use futures::FutureExt;
+use prop::collection::vec;
 use proptest::prelude::*;
-use rrr::serde_utils::{BytesOrAscii, BytesOrHexString};
+use rrr::error::Error;
+use rrr::record::{RecordName, RecordReadVersionResult, SuccessionNonce};
+use rrr::segment::RecordVersion;
+use rrr::utils::serde::{BytesOrAscii, BytesOrHexString};
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,
     record::{HashedRecordKey, Record, RecordKey, RecordMetadata},
@@ -15,28 +20,92 @@ use util::RegistryConfigWithSigningKeys;
 
 mod util;
 
-async fn hash_registry_path<L: std::fmt::Debug>(
-    registry: &Registry<L>,
-    record_names: &[Vec<u8>],
-) -> Vec<(RecordKey, HashedRecordKey)> {
-    let mut result = Vec::<(RecordKey, HashedRecordKey)>::new();
+#[derive(Debug)]
+pub struct RecordTestNode {
+    record_name: RecordName,
+    occurrences: usize,
+    successors: Vec<RecordTestNode>,
+}
 
-    for record_name in record_names {
+prop_compose! {
+    fn arb_record_test(
+        max_duplicates: usize,
+    )(
+        bytes in vec(any::<u8>(), 0..256),
+        occurrences in 1..=(max_duplicates + 1),
+    ) -> RecordTestNode {
+        RecordTestNode {
+            record_name: RecordName::from(bytes),
+            occurrences,
+            successors: vec![],
+        }
+    }
+}
+
+fn arb_record_test_tree(
+    depth: u32,
+    desired_size: u32,
+    expected_branch_size: u32,
+    max_duplicates: usize,
+) -> impl Strategy<Value = RecordTestNode> {
+    let leaf = arb_record_test(max_duplicates);
+
+    leaf.prop_recursive(depth, desired_size, expected_branch_size, move |inner| {
+        (
+            vec(inner.clone(), 0..(expected_branch_size as usize)),
+            arb_record_test(max_duplicates),
+        )
+            .prop_map(|(successors, mut parent)| {
+                parent.successors = successors;
+                parent
+            })
+    })
+}
+
+fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
+    registry: &'a Registry<L>,
+    record_test_node: &'a RecordTestNode,
+    predecessor_nonce: Option<&'a SuccessionNonce>,
+    result: &'a mut Vec<(RecordKey, HashedRecordKey, RecordVersion)>,
+) -> BoxFuture<'a, ()> {
+    async move {
         let record_key = RecordKey {
-            record_name: record_name.clone(),
-            predecessor_nonce: if let Some((_, hashed_key)) = result.last() {
-                hashed_key
-                    .derive_succession_nonce(&registry.config.kdf)
-                    .await
-                    .unwrap()
+            record_name: record_test_node.record_name.clone(),
+            predecessor_nonce: if let Some(predecessor_nonce) = predecessor_nonce {
+                predecessor_nonce.clone()
             } else {
                 registry.config.kdf.get_root_record_predecessor_nonce()
             },
         };
         let hashed_record_key = record_key.hash(&registry.config.hash).await.unwrap();
-        result.push((record_key, hashed_record_key));
-    }
+        let succession_nonce = hashed_record_key
+            .derive_succession_nonce(&registry.config.kdf)
+            .await
+            .unwrap();
 
+        for record_version in 0..record_test_node.occurrences {
+            result.push((
+                record_key.clone(),
+                hashed_record_key.clone(),
+                (record_version as u64).into(),
+            ));
+        }
+
+        for successor in &record_test_node.successors {
+            hash_registry_tree_recursive(registry, successor, Some(&succession_nonce), result)
+                .await;
+        }
+    }
+    .boxed()
+}
+
+async fn hash_registry_tree<'a, L: std::fmt::Debug + Sync + 'a>(
+    registry: &'a Registry<L>,
+    record_test_node: &'a RecordTestNode,
+    predecessor_nonce: Option<&'a SuccessionNonce>,
+) -> Vec<(RecordKey, HashedRecordKey, RecordVersion)> {
+    let mut result = Vec::new();
+    hash_registry_tree_recursive(registry, record_test_node, predecessor_nonce, &mut result).await;
     result
 }
 
@@ -51,10 +120,12 @@ prop_compose! {
 #[traced_test]
 async fn prop_registry(
     config_with_signing_keys: RegistryConfigWithSigningKeys,
-    #[strategy(array::uniform(arb_record_name()))]
-    record_names: [BytesOrHexString<Vec<u8>>; 4],
+    #[strategy(arb_record_test_tree(3, 16, 3, 2))]
+    record_test_tree: RecordTestNode,
     encryption_algorithm: Option<EncryptionAlgorithm>,
 ) {
+    dbg!(&record_test_tree);
+
     let RegistryConfigWithSigningKeys {
         signing_keys,
         config,
@@ -69,14 +140,10 @@ async fn prop_registry(
         .await
         .unwrap();
     let mut now = Utc::now();
-    let record_names = std::iter::once(Vec::new())
-        .chain(record_names.into_iter().map(|BytesOrHexString(record_name)| record_name))
-        .collect::<Vec<Vec<u8>>>();
+    let record_keys = hash_registry_tree(&registry, &record_test_tree, None).await;
+    let mut records = Vec::new();
 
-    let record_keys = hash_registry_path(&registry, &record_names).await;
-    let mut records = Vec::<Record>::new();
-
-    for (_, hashed_record_key) in &record_keys {
+    for (_, hashed_record_key, record_version) in &record_keys {
         let record = Record {
             metadata: {
                 let mut metadata = RecordMetadata::default();
@@ -91,20 +158,39 @@ async fn prop_registry(
             },
         };
 
-        registry
-            .save_record(
-                &signing_keys,
-                hashed_record_key,
-                &record,
-                0, // TODO
-                0, // TODO
-                &[], // TODO
-                encryption_algorithm.as_ref(), // TODO
-                false,
-            )
-            .await
-            .unwrap();
-        records.push(record);
+        let mut max_collision_resolution_attempts = 0;
+
+        loop {
+            let result = registry
+                .save_record(
+                    &signing_keys,
+                    hashed_record_key,
+                    &record,
+                    *record_version,
+                    max_collision_resolution_attempts,
+                    &[], // TODO
+                    encryption_algorithm.as_ref(), // TODO
+                    false,
+                )
+                .await;
+
+            match result {
+                Ok(record_nonce) => {
+                    assert_eq!(*record_nonce, max_collision_resolution_attempts);
+                    break;
+                },
+                Err(Error::CollisionResolutionFailed) => {
+                    max_collision_resolution_attempts += 1;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+
+        records.push(RecordReadVersionResult {
+            record,
+            record_nonce: max_collision_resolution_attempts.into(),
+        });
     }
 
     let registry = registry.lock_read().await.unwrap();
@@ -114,23 +200,38 @@ async fn prop_registry(
 
         assert_eq!(loaded_registry, registry);
 
-        let loaded_record_keys = hash_registry_path(&loaded_registry, &record_names).await;
+        let loaded_record_keys = hash_registry_tree(&loaded_registry, &record_test_tree, None).await;
 
         assert_eq!(loaded_record_keys, record_keys);
 
         let mut loaded_records = Vec::new();
 
-        for (_, hashed_record_key) in &record_keys {
-            let loaded_record = loaded_registry
+        for ((_, hashed_record_key, record_version), &record_nonce) in record_keys.iter().zip(records.iter().map(|result| &result.record_nonce)) {
+            if *record_nonce > 0 {
+                let found = loaded_registry
+                    .load_record(
+                        hashed_record_key,
+                        *record_version,
+                        *record_nonce - 1,
+                    )
+                    .await
+                    .unwrap()
+                    .is_none();
+
+                assert!(found, "record found despite insufficient max collision resolution attempts: {}", *record_nonce);
+            }
+
+            let result = loaded_registry
                 .load_record(
                     hashed_record_key,
-                    0, // TODO
-                    0, // TODO
+                    *record_version,
+                    *record_nonce,
                 )
                 .await
                 .unwrap()
                 .unwrap();
-            loaded_records.push(loaded_record);
+
+            loaded_records.push(result);
         }
 
         assert_eq!(loaded_records, records);

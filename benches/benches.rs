@@ -37,7 +37,7 @@ fn bench_hash_params(c: &mut Criterion) {
         file_name_length_in_bytes: ConfigParam::try_from(8).unwrap(),
     };
     let key = RecordKey {
-        record_name: RecordName::from(b"hello"),
+        record_name: RecordName::from(b"hello".to_vec()),
         predecessor_nonce: kdf.get_root_record_predecessor_nonce(),
     };
 

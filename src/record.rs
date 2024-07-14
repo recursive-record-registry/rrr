@@ -7,9 +7,10 @@ use crate::error::{Error, Result};
 use crate::registry::{Registry, RegistryConfigHash, RegistryConfigKdf, WriteLock};
 use crate::segment::{
     FragmentEncryptionKeyBytes, FragmentFileNameBytes, FragmentKey, KdfUsage,
-    KdfUsageFragmentParameters, KdfUsageFragmentUsage, Segment, SegmentMetadata,
+    KdfUsageFragmentParameters, KdfUsageFragmentUsage, RecordNonce, RecordParameters,
+    RecordVersion, Segment, SegmentMetadata,
 };
-use crate::serde_utils::{BytesOrAscii, BytesOrHexString, Secret};
+use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
@@ -56,7 +57,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 //     }
 // }
 
-pub type RecordName = Vec<u8>;
+pub type RecordName = BytesOrHexString<Vec<u8>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RecordKey {
@@ -307,6 +308,14 @@ impl<'a> From<&'a Record> for RecordSerde<'a> {
     }
 }
 
+#[derive(Debug, Clone, Deref, DerefMut, PartialEq)]
+pub struct RecordReadVersionResult {
+    #[deref]
+    #[deref_mut]
+    pub record: Record,
+    pub record_nonce: RecordNonce,
+}
+
 impl Record {
     // pub async fn list_versions<L>(
     //     registry: &Registry<L>,
@@ -319,14 +328,18 @@ impl Record {
     pub async fn read_version<L: Debug>(
         registry: &Registry<L>,
         hashed_key: &HashedRecordKey,
-        record_version: u64,
+        record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
-    ) -> Result<Option<Self>> {
+    ) -> Result<Option<RecordReadVersionResult>> {
         let mut errors = Vec::<Error>::new();
 
         'collision_resolution_loop: for record_nonce in
             0..max_collision_resolution_attempts.checked_add(1).unwrap()
         {
+            let record_parameters = RecordParameters {
+                version: record_version,
+                nonce: record_nonce.into(),
+            };
             let mut segment_index: u64 = 0;
             let mut data_buffer = Vec::<u8>::new();
 
@@ -334,9 +347,8 @@ impl Record {
                 let fragment_key = FragmentKey {
                     hashed_record_key: hashed_key.clone(),
                     fragment_parameters: KdfUsageFragmentParameters {
-                        record_version,
-                        record_nonce,
-                        segment_index,
+                        record_parameters: record_parameters.clone(),
+                        segment_index: segment_index.into(),
                     },
                 };
                 let fragment_file_name =
@@ -390,7 +402,10 @@ impl Record {
 
             info!(%record_nonce, "Record read successfully");
 
-            return Ok(Some(record));
+            return Ok(Some(RecordReadVersionResult {
+                record,
+                record_nonce: record_nonce.into(),
+            }));
         }
 
         errors.retain(|error| {
@@ -414,12 +429,12 @@ impl Record {
         signing_keys: &[SigningKey],
         registry: &Registry<WriteLock>,
         hashed_key: &HashedRecordKey,
-        record_version: u64,
+        record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
         split_at: &[usize], // TODO: Should be generated from the serialized record length.
         encryption_algorithm: Option<&EncryptionAlgorithm>,
         open_options: &OpenOptions,
-    ) -> Result<u64> {
+    ) -> Result<RecordNonce> {
         let mut data_buffer = Vec::<u8>::new();
         coset::cbor::into_writer(&self, &mut data_buffer).map_err(Error::CborSer)?;
 
@@ -461,13 +476,17 @@ impl Record {
                 trace!(%record_nonce, "Checking collisions");
                 fragments.clear();
 
+                let record_parameters = RecordParameters {
+                    version: record_version,
+                    nonce: record_nonce.into(),
+                };
+
                 for segment_index in 0..segment_sizes.len() {
                     let fragment_key = FragmentKey {
                         hashed_record_key: hashed_key.clone(),
                         fragment_parameters: KdfUsageFragmentParameters {
-                            record_version,
-                            record_nonce,
-                            segment_index: segment_index as u64,
+                            record_parameters: record_parameters.clone(),
+                            segment_index: (segment_index as u64).into(),
                         },
                     };
                     let fragment_file_name =
@@ -492,13 +511,13 @@ impl Record {
                     fragments.push((fragment_key, fragment_path));
                 }
 
-                break 'collision_resolution_loop (record_nonce, fragments);
+                break 'collision_resolution_loop (record_parameters.nonce, fragments);
             }
 
             return Err(Error::CollisionResolutionFailed);
         };
 
-        debug!(%record_nonce, "Record nonce without any collisions found");
+        debug!(?record_nonce, "Record nonce without any collisions found");
         assert_eq!(fragments.len(), segment_sizes.len());
 
         let mut rest = data_buffer.as_slice();
@@ -540,7 +559,7 @@ impl Record {
             }
         }
 
-        info!(%record_nonce, "Record written successfully");
+        info!(?record_nonce, "Record written successfully");
 
         Ok(record_nonce)
     }

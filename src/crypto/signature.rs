@@ -22,7 +22,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::{
     cbor,
     error::{Result, SignatureMismatch},
-    serde_utils::Secret,
+    utils::serde::Secret,
 };
 
 #[derive(Clone, PartialEq, Eq, Deref, DerefMut)]

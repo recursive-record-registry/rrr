@@ -11,7 +11,7 @@ use rrr::{
     cbor::{SerializeExt, Value, ValueExt},
     crypto::encryption::EncryptionAlgorithm,
     record::{Record, RecordKey},
-    segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, Segment},
+    segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters, Segment},
 };
 use std::{fs, path::Path};
 use test_strategy::proptest;
@@ -102,16 +102,18 @@ async fn verify_cddl_fragment(
         signing_keys,
     } = config_with_signing_keys;
     let record_key = RecordKey {
-        record_name: vec![],                                               // TODO
+        record_name: Default::default(),
         predecessor_nonce: config.kdf.get_root_record_predecessor_nonce(), // TODO
     };
     let hashed_record_key = record_key.hash(&config.hash).await.unwrap();
     let fragment_key = FragmentKey {
         hashed_record_key: hashed_record_key.clone(),
         fragment_parameters: KdfUsageFragmentParameters {
-            record_version: 0, // TODO
-            record_nonce: 0,   // TODO
-            segment_index: 0,  // TODO
+            record_parameters: RecordParameters {
+                version: 0.into(), // TODO
+                nonce: 0.into(),   // TODO
+            },
+            segment_index: 0.into(), // TODO
         },
     };
     let mut fragment_bytes = Vec::<u8>::new();
