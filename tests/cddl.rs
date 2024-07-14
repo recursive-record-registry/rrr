@@ -10,8 +10,10 @@ use itertools::Itertools;
 use rrr::{
     cbor::{SerializeExt, Value, ValueExt},
     crypto::encryption::EncryptionAlgorithm,
+    record::segment::{
+        FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters, Segment,
+    },
     record::{Record, RecordKey},
-    segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters, Segment},
 };
 use std::{fs, path::Path};
 use test_strategy::proptest;

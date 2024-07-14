@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use crate::{
     cbor::SerializeExt,
-    record::{HashedRecordKey, RecordKey, RecordName},
+    record::{HashedRecordKey, RecordKey, RecordName, RecordPath},
     registry::Registry,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use color_eyre::{
-    eyre::{bail, OptionExt},
+    eyre::{bail, eyre, OptionExt},
     Result,
 };
 use futures::TryStreamExt;
@@ -94,7 +94,7 @@ pub struct RrrArgsRecordPath {
 }
 
 impl RrrArgsRecordPath {
-    async fn parse_record_path(&self) -> Result<Vec<RecordName>> {
+    async fn parse_record_path(&self) -> Result<RecordPath> {
         let mut result = Vec::new();
 
         if !self.no_prepend_root_record_name {
@@ -108,7 +108,7 @@ impl RrrArgsRecordPath {
             );
         }
 
-        Ok(result)
+        Ok(result.try_into()?)
     }
 }
 
@@ -139,14 +139,14 @@ impl RecordNameFormat {
 
 async fn resolve_path<L>(
     registry: &Registry<L>,
-    record_names: &[RecordName],
+    record_path: &RecordPath,
 ) -> color_eyre::Result<HashedRecordKey> {
-    let mut record_names_iter = record_names.iter();
+    let mut record_names_iter = record_path.iter();
     let hashed_record_key_root = RecordKey {
         record_name: record_names_iter
             .next()
-            .cloned()
-            .ok_or_eyre("No record name specified")?,
+            .expect("record path should never be empty")
+            .clone(),
         predecessor_nonce: registry.config.kdf.get_root_record_predecessor_nonce(),
     }
     .hash(&registry.config.hash)
@@ -194,8 +194,8 @@ impl RrrArgs {
                     record_path_args,
                 } => {
                     let registry = Registry::open(self.registry_directory).await?;
-                    let record_names = record_path_args.parse_record_path().await?;
-                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
+                    let record_path = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_path).await?;
                     let record = registry
                         .load_record(
                             &hashed_record_key,
@@ -203,11 +203,11 @@ impl RrrArgs {
                             record_path_args.max_collision_resolution_attempts,
                         )
                         .await?
-                        .ok_or_eyre("record not found")?;
+                        .ok_or_else(|| eyre!("record not found: {record_path}"))?;
 
                     println!("# Record parameters");
-                    println!("- path:          {}", record_names.iter().format(" "));
-                    println!("- name:          {}", record_names.last().unwrap());
+                    println!("- path:          {}", record_path.iter().format(" "));
+                    println!("- name:          {}", record_path.last());
                     println!("- version:       {}", record_version);
                     println!("- nonce:         {}", *record.record_nonce);
                     println!("- content bytes: {}", record.data.len());
@@ -247,8 +247,8 @@ impl RrrArgs {
                     record_path_args,
                 } => {
                     let registry = Registry::open(self.registry_directory).await?;
-                    let record_names = record_path_args.parse_record_path().await?;
-                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
+                    let record_path = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_path).await?;
                     let record = registry
                         .load_record(
                             &hashed_record_key,
@@ -256,7 +256,7 @@ impl RrrArgs {
                             record_path_args.max_collision_resolution_attempts,
                         )
                         .await?
-                        .ok_or_eyre("record not found")?;
+                        .ok_or_else(|| eyre!("record not found: {record_path}"))?;
 
                     tokio::io::stdout().write_all(&record.data).await?;
                 }

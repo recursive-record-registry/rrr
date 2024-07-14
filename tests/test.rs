@@ -5,8 +5,8 @@ use futures::FutureExt;
 use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
+use rrr::record::segment::{RecordNonce, RecordVersion};
 use rrr::record::{RecordName, SuccessionNonce};
-use rrr::segment::{RecordNonce, RecordVersion};
 use rrr::utils::serde::{BytesOrAscii, BytesOrHexString};
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,

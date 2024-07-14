@@ -66,7 +66,6 @@ pub mod crypto;
 pub mod error;
 pub mod record;
 pub mod registry;
-pub mod segment;
 
 #[cfg(feature = "cmd")]
 pub mod cmd;

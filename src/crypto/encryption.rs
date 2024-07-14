@@ -3,7 +3,7 @@ use std::{
     ops::Deref,
 };
 
-use crate::segment::FragmentEncryptionKeyBytes;
+use crate::record::segment::FragmentEncryptionKeyBytes;
 use aes_gcm::{
     aead::{Aead, Payload},
     Aes256Gcm, KeyInit,

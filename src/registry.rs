@@ -3,15 +3,22 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
-use crate::record::{HashedRecordKey, Record, RecordReadVersionSuccess, SuccessionNonce};
-use crate::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
+use crate::error::{Error, Result};
+use crate::record::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
+use crate::record::{
+    HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce,
+};
 use crate::utils::serde::Secret;
 use async_fd_lock::{LockRead, LockWrite};
 use async_scoped::TokioScope;
+use casey::pascal;
+use coset::{cbor::tag, CoseKey};
+use derive_more::{Deref, DerefMut};
 use proptest::arbitrary::{any, Arbitrary};
 use proptest::prop_compose;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -20,18 +27,12 @@ use std::{
     path::{Path, PathBuf},
 };
 use thiserror::Error;
-use tokio_util::io::SyncIoBridge;
-use tracing::warn;
-
-use crate::error::{Error, Result};
-use casey::pascal;
-use coset::{cbor::tag, CoseKey};
-use derive_more::{Deref, DerefMut};
-use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncRead, AsyncWrite},
 };
+use tokio_util::io::SyncIoBridge;
+use tracing::warn;
 
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
@@ -411,7 +412,7 @@ pub struct Registry<L> {
     file_lock: L,
 }
 
-impl<L: Debug> Registry<L> {
+impl<L: Debug + Sync> Registry<L> {
     pub const RELATIVE_PATH_CONFIG: &'static str = "registry.cbor";
     pub const RELATIVE_PATH_RECORDS: &'static str = "records";
 
@@ -441,14 +442,13 @@ impl<L: Debug> Registry<L> {
 
     pub async fn load_record(
         &self,
-        // TODO: Make it possible to pass in a non-hashed record key, as well as a path.
-        hashed_key: &HashedRecordKey,
+        hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
     ) -> Result<Option<RecordReadVersionSuccess>> {
         Record::read_version(
             self,
-            hashed_key,
+            hash_record_path,
             record_version,
             max_collision_resolution_attempts,
         )
@@ -534,8 +534,7 @@ impl Registry<WriteLock> {
     pub async fn save_record(
         &mut self,
         signing_keys: &[SigningKey],
-        // TODO: Make it possible to pass in a non-hashed record key, as well as a path.
-        hashed_key: &HashedRecordKey,
+        hash_record_path: &(impl HashRecordPath + Debug),
         record: &Record,
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
@@ -557,7 +556,7 @@ impl Registry<WriteLock> {
             .write_version(
                 signing_keys,
                 self,
-                hashed_key,
+                hash_record_path,
                 record_version,
                 max_collision_resolution_attempts,
                 split_at,
