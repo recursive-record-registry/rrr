@@ -74,7 +74,11 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
             predecessor_nonce: if let Some(predecessor_nonce) = predecessor_nonce {
                 predecessor_nonce.clone()
             } else {
-                registry.config.kdf.get_root_record_predecessor_nonce()
+                registry
+                    .config
+                    .kdf
+                    .get_root_record_predecessor_nonce()
+                    .clone()
             },
         };
         let hashed_record_key = record_key.hash(&registry.config.hash).await.unwrap();

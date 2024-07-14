@@ -27,7 +27,6 @@ Launch it by running the following:
     ```
 
 ## TODO
-* [ ] Replace Argon2's pepper with configured initial succession nonce, do not use pepper by default.
 * [ ] Splitting records into multiple files.
     * [x] Basic library implementation
     * [ ] Pad contents to a registry-wide constant length.

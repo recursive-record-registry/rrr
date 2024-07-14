@@ -2052,6 +2052,7 @@ dependencies = [
  "proptest",
  "proptest-arbitrary-interop",
  "proptest-derive",
+ "rand",
  "serde",
  "serde_with",
  "sha2",

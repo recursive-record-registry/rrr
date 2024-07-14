@@ -8,7 +8,6 @@ use proptest_derive::Arbitrary;
 use std::fmt::Debug;
 
 use crate::error::Result;
-use aes_gcm::aead::rand_core::{CryptoRng, RngCore};
 use argon2::Argon2;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -40,30 +39,18 @@ pub struct Argon2Params {
     /// Degree of parallelism. Between 1 and (2^24)-1.
     #[zeroize(skip)]
     pub p_cost: u32,
-    pub pepper: Secret<BytesOrHexString<Vec<u8>>>,
+    pub pepper: Option<Secret<BytesOrHexString<Vec<u8>>>>,
 }
 
-impl Argon2Params {
-    pub fn default_with_pepper(pepper: impl Into<Vec<u8>>) -> Self {
+impl Default for Argon2Params {
+    fn default() -> Self {
         Self {
             variant: Variant::Argon2id,
             m_cost: 1 << 10, // 1 MiB
             t_cost: 1 << 10,
             p_cost: 1,
-            pepper: Secret(BytesOrHexString(pepper.into())),
+            pepper: None,
         }
-    }
-
-    pub fn default_with_random_pepper<const PEPPER_BYTES: usize>(
-        mut rng: impl CryptoRng + RngCore,
-    ) -> Self {
-        let mut pepper = vec![0; PEPPER_BYTES];
-        rng.fill_bytes(&mut pepper);
-        Self::default_with_pepper(pepper)
-    }
-
-    pub fn default_with_random_pepper_of_recommended_length(rng: impl CryptoRng + RngCore) -> Self {
-        Self::default_with_random_pepper::<{ super::BYTES_HASH_PEPPER_RECOMMENDED }>(rng)
     }
 }
 
@@ -74,12 +61,20 @@ impl PasswordHash for Argon2Params {
             Variant::Argon2i => argon2::Algorithm::Argon2i,
             Variant::Argon2id => argon2::Algorithm::Argon2id,
         };
-        let argon2 = Argon2::new_with_secret(
-            &self.pepper,
-            variant,
-            argon2::Version::V0x13,
-            argon2::Params::new(self.m_cost, self.t_cost, self.p_cost, Some(output.len()))?,
-        )?;
+        let argon2 = if let Some(pepper) = self.pepper.as_ref() {
+            Argon2::new_with_secret(
+                pepper,
+                variant,
+                argon2::Version::V0x13,
+                argon2::Params::new(self.m_cost, self.t_cost, self.p_cost, Some(output.len()))?,
+            )?
+        } else {
+            Argon2::new(
+                variant,
+                argon2::Version::V0x13,
+                argon2::Params::new(self.m_cost, self.t_cost, self.p_cost, Some(output.len()))?,
+            )
+        };
         argon2.hash_password_into(password, salt, output)?;
 
         Ok(())
@@ -95,9 +90,15 @@ prop_compose! {
         m_cost in (8 * p_cost)..(std::cmp::max(8 * p_cost + 1, 1 << log_max_cost)),
         t_cost in Just(t_cost),
         p_cost in Just(p_cost),
-        pepper in proptest::collection::vec(any::<u8>(), 0..(1 << 10)),
+        pepper in proptest::option::of(proptest::collection::vec(any::<u8>(), 0..(1 << 10))),
     ) -> Argon2Params {
-        Argon2Params { variant, m_cost, t_cost, p_cost, pepper: Secret(BytesOrHexString(pepper)) }
+        Argon2Params {
+            variant,
+            m_cost,
+            t_cost,
+            p_cost,
+            pepper: pepper.map(|pepper| Secret(BytesOrHexString(pepper))),
+        }
     }
 }
 

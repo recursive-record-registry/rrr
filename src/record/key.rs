@@ -3,14 +3,14 @@ use crate::crypto::kdf::KdfExt;
 use crate::crypto::password_hash::PasswordHash;
 use crate::error::Result;
 use crate::record::segment::{
-    FragmentEncryptionKeyBytes, FragmentFileNameBytes, KdfUsage,
-    KdfUsageFragmentParameters, KdfUsageFragmentUsage,
+    FragmentEncryptionKeyBytes, FragmentFileNameBytes, KdfUsage, KdfUsageFragmentParameters,
+    KdfUsageFragmentUsage,
 };
 use crate::registry::{Registry, RegistryConfigHash, RegistryConfigKdf};
 use crate::utils::serde::{BytesOrHexString, Secret};
 use async_trait::async_trait;
-use std::ops::{Deref, DerefMut};
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::{RecordName, SuccessionNonce};
@@ -70,7 +70,7 @@ impl HashedRecordKey {
         okm: &mut [u8],
     ) -> Result<()> {
         kdf_params
-            .algorithm
+            .get_algorithm()
             .derive_key_from_canonicalized_cbor(self, usage, okm)?;
         Ok(())
     }
@@ -101,13 +101,13 @@ impl HashedRecordKey {
         &self,
         kdf_params: &RegistryConfigKdf,
     ) -> Result<SuccessionNonce> {
-        let mut okm =
-            vec![0_u8; *kdf_params.succession_nonce_length_in_bytes as usize].into_boxed_slice();
+        let mut okm = vec![0_u8; kdf_params.get_succession_nonce_length_in_bytes() as usize]
+            .into_boxed_slice();
 
         self.derive_key(&KdfUsage::SuccessionNonce {}, kdf_params, &mut okm)
             .await?;
 
-        Ok(SuccessionNonce(Secret(okm)))
+        Ok(SuccessionNonce(Secret(BytesOrHexString(okm))))
     }
 
     pub async fn derive_fragment_file_name(
@@ -115,7 +115,8 @@ impl HashedRecordKey {
         kdf_params: &RegistryConfigKdf,
         fragment_parameters: &KdfUsageFragmentParameters,
     ) -> Result<FragmentFileNameBytes> {
-        let mut okm = vec![0_u8; *kdf_params.file_name_length_in_bytes as usize].into_boxed_slice();
+        let mut okm =
+            vec![0_u8; kdf_params.get_file_name_length_in_bytes() as usize].into_boxed_slice();
         let usage = KdfUsage::Fragment {
             usage: KdfUsageFragmentUsage::FileName,
             parameters: fragment_parameters.clone(),

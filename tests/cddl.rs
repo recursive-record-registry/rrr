@@ -105,7 +105,7 @@ async fn verify_cddl_fragment(
     } = config_with_signing_keys;
     let record_key = RecordKey {
         record_name: Default::default(),
-        predecessor_nonce: config.kdf.get_root_record_predecessor_nonce(), // TODO
+        predecessor_nonce: config.kdf.get_root_record_predecessor_nonce().clone(),
     };
     let hashed_record_key = record_key.hash(&config.hash).await.unwrap();
     let fragment_key = FragmentKey {

@@ -3,7 +3,7 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::signature::SigningKey;
 use crate::error::{Error, Result};
 use crate::registry::{Registry, WriteLock};
-use crate::utils::serde::{BytesOrAscii, Secret};
+use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
@@ -15,9 +15,8 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_arbitrary_interop::arb;
 use proptest_derive::Arbitrary;
 use segment::{
-    FragmentFileNameBytes, FragmentKey, FragmentReadSuccess,
-    KdfUsageFragmentParameters, RecordNonce, RecordParameters,
-    RecordVersion, Segment, SegmentMetadata,
+    FragmentFileNameBytes, FragmentKey, FragmentReadSuccess, KdfUsageFragmentParameters,
+    RecordNonce, RecordParameters, RecordVersion, Segment, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -36,8 +35,8 @@ mod path;
 pub use key::*;
 pub use path::*;
 
-#[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct SuccessionNonce(pub(crate) Secret<Box<[u8]>>);
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop, Serialize, Deserialize)]
+pub struct SuccessionNonce(pub(crate) Secret<BytesOrHexString<Box<[u8]>>>);
 
 impl Deref for SuccessionNonce {
     type Target = [u8];

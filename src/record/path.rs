@@ -81,7 +81,11 @@ impl HashRecordPath for RecordPath {
                 .next()
                 .expect("record path should never be empty")
                 .clone(),
-            predecessor_nonce: registry.config.kdf.get_root_record_predecessor_nonce(),
+            predecessor_nonce: registry
+                .config
+                .kdf
+                .get_root_record_predecessor_nonce()
+                .clone(),
         }
         .hash(&registry.config.hash)
         .await?;

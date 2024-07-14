@@ -3,21 +3,21 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
-use crate::error::{Error, Result};
+use crate::error::{Error, InvalidParameterError, OptionExt, Result};
 use crate::record::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
-use crate::record::{
-    HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce,
-};
-use crate::utils::serde::Secret;
+use crate::record::{HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce};
+use crate::utils::serde::{BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
 use async_scoped::TokioScope;
 use casey::pascal;
 use coset::{cbor::tag, CoseKey};
 use derive_more::{Deref, DerefMut};
 use proptest::arbitrary::{any, Arbitrary};
+use proptest::collection::vec;
 use proptest::prop_compose;
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::strategy::{BoxedStrategy, Just, Strategy};
 use proptest_derive::Arbitrary;
+use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Display;
@@ -37,7 +37,7 @@ use tracing::warn;
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
 pub trait ConfigParamTrait {
-    type T: Ord + Debug;
+    type T: Ord + Debug + Send + Sync + 'static;
     const LABEL: &'static str;
     // Better readability than `std::any::type_name`, because it does not contain the full path to the type.
     const TYPE_NAME: &'static str;
@@ -240,19 +240,95 @@ impl Arbitrary for RegistryConfigHash {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+pub struct RegistryConfigKdfBuilder {
+    algorithm: Option<KdfAlgorithm>,
+    file_name_length_in_bytes: Option<<FileNameLengthInBytes as ConfigParamTrait>::T>,
+    succession_nonce_length_in_bytes: Option<<SuccessionNonceLengthInBytes as ConfigParamTrait>::T>,
+}
+
+impl RegistryConfigKdfBuilder {
+    pub fn with_algorithm(&mut self, algorithm: KdfAlgorithm) -> &mut Self {
+        self.algorithm = Some(algorithm);
+        self
+    }
+
+    pub fn with_file_name_length_in_bytes(
+        &mut self,
+        file_name_length_in_bytes: <FileNameLengthInBytes as ConfigParamTrait>::T,
+    ) -> &mut Self {
+        self.file_name_length_in_bytes = Some(file_name_length_in_bytes);
+        self
+    }
+
+    pub fn with_succession_nonce_length_in_bytes(
+        &mut self,
+        succession_nonce_length_in_bytes: <SuccessionNonceLengthInBytes as ConfigParamTrait>::T,
+    ) -> &mut Self {
+        self.succession_nonce_length_in_bytes = Some(succession_nonce_length_in_bytes);
+        self
+    }
+
+    pub fn build_with_random_root_predecessor_nonce(
+        &self,
+        mut csprng: impl RngCore + CryptoRng,
+    ) -> Result<RegistryConfigKdf> {
+        let algorithm = self.algorithm.unwrap_builder_parameter("algorithm")?;
+        let file_name_length_in_bytes = ConfigParam::try_from(
+            self.file_name_length_in_bytes
+                .unwrap_builder_parameter("file_name_length_in_bytes")?,
+        )
+        .map_err(InvalidParameterError::from)?;
+        let succession_nonce_length_in_bytes = ConfigParam::try_from(
+            self.succession_nonce_length_in_bytes
+                .unwrap_builder_parameter("succession_nonce_length_in_bytes")?,
+        )
+        .map_err(InvalidParameterError::from)?;
+        Ok(RegistryConfigKdf {
+            root_predecessor_nonce: {
+                let mut bytes =
+                    vec![0_u8; *succession_nonce_length_in_bytes as usize].into_boxed_slice();
+                csprng.fill_bytes(&mut bytes);
+                SuccessionNonce(Secret(BytesOrHexString(bytes)))
+            },
+            algorithm,
+            file_name_length_in_bytes,
+            succession_nonce_length_in_bytes,
+        })
+    }
+}
+
+impl RegistryConfigKdfBuilder {}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigKdf {
-    pub algorithm: KdfAlgorithm,
-    pub succession_nonce_length_in_bytes: ConfigParam<SuccessionNonceLengthInBytes>,
-    pub file_name_length_in_bytes: ConfigParam<FileNameLengthInBytes>,
+    algorithm: KdfAlgorithm,
+    file_name_length_in_bytes: ConfigParam<FileNameLengthInBytes>,
+    succession_nonce_length_in_bytes: ConfigParam<SuccessionNonceLengthInBytes>,
+    root_predecessor_nonce: SuccessionNonce,
 }
 
 impl RegistryConfigKdf {
-    pub fn get_root_record_predecessor_nonce(&self) -> SuccessionNonce {
-        // TODO: Replace with a configurable field
-        SuccessionNonce(Secret(
-            vec![0_u8; *self.succession_nonce_length_in_bytes as usize].into(),
-        ))
+    pub fn builder() -> RegistryConfigKdfBuilder {
+        Default::default()
+    }
+
+    pub fn get_algorithm(&self) -> &KdfAlgorithm {
+        &self.algorithm
+    }
+
+    pub fn get_file_name_length_in_bytes(&self) -> <FileNameLengthInBytes as ConfigParamTrait>::T {
+        *self.file_name_length_in_bytes
+    }
+
+    pub fn get_succession_nonce_length_in_bytes(
+        &self,
+    ) -> <SuccessionNonceLengthInBytes as ConfigParamTrait>::T {
+        *self.succession_nonce_length_in_bytes
+    }
+
+    pub fn get_root_record_predecessor_nonce(&self) -> &SuccessionNonce {
+        &self.root_predecessor_nonce
     }
 }
 
@@ -261,8 +337,18 @@ prop_compose! {
         algorithm in any::<KdfAlgorithm>(),
         succession_nonce_length_in_bytes in arb_config_param(128),
         file_name_length_in_bytes in arb_config_param(64),
+    )(
+        root_predecessor_nonce in vec(any::<u8>(), (*succession_nonce_length_in_bytes as usize)..=128),
+        algorithm in Just(algorithm),
+        succession_nonce_length_in_bytes in Just(succession_nonce_length_in_bytes),
+        file_name_length_in_bytes in Just(file_name_length_in_bytes),
     ) -> RegistryConfigKdf {
-        RegistryConfigKdf { algorithm, succession_nonce_length_in_bytes, file_name_length_in_bytes }
+        RegistryConfigKdf {
+            algorithm,
+            file_name_length_in_bytes,
+            succession_nonce_length_in_bytes,
+            root_predecessor_nonce: SuccessionNonce(Secret(BytesOrHexString(root_predecessor_nonce.into()))),
+        }
     }
 }
 

@@ -11,8 +11,6 @@ use crate::error::Result;
 
 pub mod argon2;
 
-pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
-
 pub trait PasswordHash {
     fn hash_password(&self, password: &[u8], salt: &[u8], output: &mut [u8]) -> Result<()>;
 }

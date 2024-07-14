@@ -11,8 +11,9 @@ RRR_Registry = {
     },
     kdf: {
         algorithm: RRR_KdfAlgorithm,
-        succession_nonce_length_in_bytes: uint .ge 16,
         file_name_length_in_bytes: uint .ge 1,
+        succession_nonce_length_in_bytes: uint .ge 16,
+        root_predecessor_nonce: bstr, ; .size (16..1000), ; The upper bound is arbitrary TODO: not supported by cddl-rs
     },
     ? verifying_keys: [ * RRR_VerifyingKey ],
 }

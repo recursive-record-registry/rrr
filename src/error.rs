@@ -2,7 +2,10 @@ use std::borrow::Cow;
 
 use async_fd_lock::LockError;
 use coset::RegisteredLabel;
+use derive_more::From;
 use thiserror::Error;
+
+use crate::registry::{ConfigParamTooLowError, ConfigParamTrait};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -44,6 +47,8 @@ pub enum Error {
     UnrecognizedEncryptionAlgorithm { alg: Option<coset::Algorithm> },
     #[error("Failed to resolve collisions")]
     CollisionResolutionFailed,
+    #[error(transparent)]
+    InvalidParameter(#[from] InvalidParameterError),
 }
 
 impl<T> From<LockError<T>> for Error {
@@ -53,3 +58,60 @@ impl<T> From<LockError<T>> for Error {
 }
 
 pub struct SignatureMismatch;
+
+#[derive(Error, Debug)]
+#[error("Invalid parameter `{label}`: {source}")]
+pub struct InvalidParameterError {
+    pub label: &'static str,
+    #[source]
+    pub source: Box<dyn std::error::Error + Send + Sync + 'static>,
+}
+
+impl<P> From<ConfigParamTooLowError<P>> for InvalidParameterError
+where
+    P: ConfigParamTrait + 'static,
+{
+    fn from(value: ConfigParamTooLowError<P>) -> Self {
+        InvalidParameterError {
+            label: P::LABEL,
+            source: Box::new(value),
+        }
+    }
+}
+
+#[derive(Error, Debug, From)]
+#[error("{0}")]
+pub struct GenericError(pub Cow<'static, str>);
+
+impl From<&'static str> for GenericError {
+    fn from(value: &'static str) -> Self {
+        Self(Cow::Borrowed(value))
+    }
+}
+
+impl From<String> for GenericError {
+    fn from(value: String) -> Self {
+        Self(Cow::Owned(value))
+    }
+}
+
+pub trait OptionExt<T> {
+    fn unwrap_builder_parameter(
+        &self,
+        label: &'static str,
+    ) -> std::result::Result<T, InvalidParameterError>;
+}
+
+impl<T: Clone> OptionExt<T> for Option<T> {
+    fn unwrap_builder_parameter(
+        &self,
+        label: &'static str,
+    ) -> std::result::Result<T, InvalidParameterError> {
+        self.as_ref().cloned().ok_or_else(|| InvalidParameterError {
+            label,
+            source: Box::new(GenericError::from(
+                "value is required but was not specified",
+            )),
+        })
+    }
+}
