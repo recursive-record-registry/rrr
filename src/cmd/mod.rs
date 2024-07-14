@@ -7,7 +7,7 @@ use crate::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use color_eyre::{
-    eyre::{bail, eyre, OptionExt},
+    eyre::{bail, eyre},
     Result,
 };
 use futures::TryStreamExt;
