@@ -3,7 +3,7 @@ use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
-use crate::record::{HashedRecordKey, Record, RecordReadVersionResult, SuccessionNonce};
+use crate::record::{HashedRecordKey, Record, RecordReadVersionSuccess, SuccessionNonce};
 use crate::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
 use crate::utils::serde::Secret;
 use async_fd_lock::{LockRead, LockWrite};
@@ -441,11 +441,11 @@ impl<L: Debug> Registry<L> {
 
     pub async fn load_record(
         &self,
-        // TODO: Make it possible to pass in a non-hashed record key
+        // TODO: Make it possible to pass in a non-hashed record key, as well as a path.
         hashed_key: &HashedRecordKey,
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
-    ) -> Result<Option<RecordReadVersionResult>> {
+    ) -> Result<Option<RecordReadVersionSuccess>> {
         Record::read_version(
             self,
             hashed_key,
@@ -534,7 +534,7 @@ impl Registry<WriteLock> {
     pub async fn save_record(
         &mut self,
         signing_keys: &[SigningKey],
-        // TODO: Make it possible to pass in a non-hashed record key
+        // TODO: Make it possible to pass in a non-hashed record key, as well as a path.
         hashed_key: &HashedRecordKey,
         record: &Record,
         record_version: RecordVersion,

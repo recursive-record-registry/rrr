@@ -14,7 +14,7 @@ path = "src/bin.rs"
 required-features = ["cmd"]
 
 [features]
-cmd = ["clap", "color-eyre", "hex", "tracing-error", "tracing-subscriber"]
+cmd = ["cbor-diag", "clap", "color-eyre", "hex", "tracing-error", "tracing-subscriber"]
 
 [dependencies]
 aes-gcm = { version = "0.10.3", features = ["std"] }
@@ -45,6 +45,7 @@ tokio-util = { version = "0.7.11", features = ["io-util"] }
 tracing = "0.1.40"
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
 # Dependencies of the executable binary
+cbor-diag = { version = "0.1.12", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
 color-eyre = { version = "0.6.3", optional = true }
 hex = { version = "0.4.3", optional = true }

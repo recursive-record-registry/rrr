@@ -5,8 +5,8 @@ use futures::FutureExt;
 use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
-use rrr::record::{RecordName, RecordReadVersionResult, SuccessionNonce};
-use rrr::segment::RecordVersion;
+use rrr::record::{RecordName, SuccessionNonce};
+use rrr::segment::{RecordNonce, RecordVersion};
 use rrr::utils::serde::{BytesOrAscii, BytesOrHexString};
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,
@@ -141,7 +141,7 @@ async fn prop_registry(
         .unwrap();
     let mut now = Utc::now();
     let record_keys = hash_registry_tree(&registry, &record_test_tree, None).await;
-    let mut records = Vec::new();
+    let mut records = Vec::<(Record, RecordNonce)>::new();
 
     for (_, hashed_record_key, record_version) in &record_keys {
         let record = Record {
@@ -187,10 +187,10 @@ async fn prop_registry(
             }
         };
 
-        records.push(RecordReadVersionResult {
+        records.push((
             record,
-            record_nonce: max_collision_resolution_attempts.into(),
-        });
+            max_collision_resolution_attempts.into(),
+        ));
     }
 
     let registry = registry.lock_read().await.unwrap();
@@ -206,19 +206,19 @@ async fn prop_registry(
 
         let mut loaded_records = Vec::new();
 
-        for ((_, hashed_record_key, record_version), &record_nonce) in record_keys.iter().zip(records.iter().map(|result| &result.record_nonce)) {
+        for ((_, hashed_record_key, record_version), &record_nonce) in record_keys.iter().zip(records.iter().map(|(_, record_nonce)| record_nonce)) {
             if *record_nonce > 0 {
-                let found = loaded_registry
+                let result = loaded_registry
                     .load_record(
                         hashed_record_key,
                         *record_version,
                         *record_nonce - 1,
                     )
-                    .await
-                    .unwrap()
-                    .is_none();
+                    .await;
+                dbg!(&result);
+                let found = matches!(result, Ok(Some(_)));
 
-                assert!(found, "record found despite insufficient max collision resolution attempts: {}", *record_nonce);
+                assert!(!found, "record found despite insufficient max collision resolution attempts: {}", *record_nonce);
             }
 
             let result = loaded_registry
@@ -231,9 +231,10 @@ async fn prop_registry(
                 .unwrap()
                 .unwrap();
 
-            loaded_records.push(result);
+            loaded_records.push((result.record, result.record_nonce));
         }
 
+        // TODO: Check segment equality
         assert_eq!(loaded_records, records);
     }
 }

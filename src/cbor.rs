@@ -3,6 +3,7 @@ use std::{
     marker::PhantomData,
 };
 
+use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::{
     cbor::value::CanonicalValue, CoseEncrypt0, CoseSign, CoseSignature, Header, ProtectedHeader,
@@ -134,6 +135,10 @@ impl Map {
             Box::new(Value::Text(string)),
         );
         self.insert(key, value)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&HashableCborValue, &Value)> {
+        self.0.iter()
     }
 }
 
@@ -396,11 +401,14 @@ impl<T: Serialize> SerializeAs<T> for AsCanonicalValue<T> {
     }
 }
 
+#[async_trait]
 pub trait SerializeExt {
     fn as_canonical_cbor_value(&self) -> Result<Value>;
     fn as_canonical_cbor_bytes(&self) -> Result<Vec<u8>>;
+    fn as_cbor_bytes(&self) -> Result<Vec<u8>>;
 }
 
+#[async_trait]
 impl<T: Serialize> SerializeExt for T {
     fn as_canonical_cbor_value(&self) -> Result<Value> {
         let mut value = Value::serialized(self).map_err(Error::Cbor)?;
@@ -411,10 +419,14 @@ impl<T: Serialize> SerializeExt for T {
     }
 
     fn as_canonical_cbor_bytes(&self) -> Result<Vec<u8>> {
-        let value = self.as_canonical_cbor_value()?;
+        self.as_canonical_cbor_value()?.as_cbor_bytes()
+    }
+
+    fn as_cbor_bytes(&self) -> Result<Vec<u8>> {
         let mut result = Vec::new();
 
-        coset::cbor::into_writer(&value, &mut result).map_err(Error::CborSer)?;
+        // TODO: This is a blocking operation. Defer to a blocking task.
+        coset::cbor::into_writer(&self, &mut result).map_err(Error::CborSer)?;
 
         Ok(result)
     }

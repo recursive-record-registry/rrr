@@ -305,7 +305,7 @@ impl Segment {
         kdf_params: &RegistryConfigKdf,
         mut read: impl AsyncRead + Unpin + Send,
         fragment_key: &FragmentKey,
-    ) -> Result<Self> {
+    ) -> Result<FragmentReadSuccess> {
         let input_value = {
             let mut input_bytes = Vec::new();
             read.read_to_end(&mut input_bytes).await?;
@@ -358,7 +358,7 @@ impl Segment {
         };
 
         // Decrypt the fragment, if necessary.
-        let input_value = match input_value {
+        let (input_value, encryption_algorithm) = match input_value {
             cbor::Value::Tag(tag, input_value) if tag == CoseEncrypt0::TAG => {
                 let encrypted =
                     CoseEncrypt0::from_cbor_value(*input_value).map_err(Error::Coset)?;
@@ -389,18 +389,22 @@ impl Segment {
                         key: &encryption_key,
                     },
                 )?;
+                let plaintext_value = cbor::Value::from_slice(&plaintext).map_err(Error::Coset)?;
 
-                cbor::Value::from_slice(&plaintext).map_err(Error::Coset)?
+                (plaintext_value, Some(encryption_algorithm))
             }
             input_value => {
                 // The fragment is not encrypted.
-                input_value
+                (input_value, None)
             }
         };
 
-        let record = input_value.deserialized::<Self>().map_err(Error::Cbor)?;
+        let segment = input_value.deserialized::<Self>().map_err(Error::Cbor)?;
 
-        Ok(record)
+        Ok(FragmentReadSuccess {
+            segment,
+            encryption_algorithm,
+        })
     }
 
     pub async fn write_fragment(
@@ -496,6 +500,14 @@ impl Segment {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deref, DerefMut, PartialEq)]
+pub struct FragmentReadSuccess {
+    #[deref]
+    #[deref_mut]
+    pub segment: Segment,
+    pub encryption_algorithm: Option<EncryptionAlgorithm>,
 }
 
 /// Data known when opening a record.

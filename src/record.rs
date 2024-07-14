@@ -6,7 +6,7 @@ use crate::crypto::signature::SigningKey;
 use crate::error::{Error, Result};
 use crate::registry::{Registry, RegistryConfigHash, RegistryConfigKdf, WriteLock};
 use crate::segment::{
-    FragmentEncryptionKeyBytes, FragmentFileNameBytes, FragmentKey, KdfUsage,
+    FragmentEncryptionKeyBytes, FragmentFileNameBytes, FragmentKey, FragmentReadSuccess, KdfUsage,
     KdfUsageFragmentParameters, KdfUsageFragmentUsage, RecordNonce, RecordParameters,
     RecordVersion, Segment, SegmentMetadata,
 };
@@ -57,7 +57,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 //     }
 // }
 
-pub type RecordName = BytesOrHexString<Vec<u8>>;
+pub type RecordName = BytesOrAscii<Vec<u8>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RecordKey {
@@ -308,12 +308,20 @@ impl<'a> From<&'a Record> for RecordSerde<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordReadVersionSuccessSegment {
+    pub segment_bytes: usize,
+    pub fragment_file_name: FragmentFileNameBytes,
+    pub fragment_encryption_algorithm: Option<EncryptionAlgorithm>,
+}
+
 #[derive(Debug, Clone, Deref, DerefMut, PartialEq)]
-pub struct RecordReadVersionResult {
+pub struct RecordReadVersionSuccess {
     #[deref]
     #[deref_mut]
     pub record: Record,
     pub record_nonce: RecordNonce,
+    pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
 impl Record {
@@ -330,7 +338,7 @@ impl Record {
         hashed_key: &HashedRecordKey,
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
-    ) -> Result<Option<RecordReadVersionResult>> {
+    ) -> Result<Option<RecordReadVersionSuccess>> {
         let mut errors = Vec::<Error>::new();
 
         'collision_resolution_loop: for record_nonce in
@@ -340,7 +348,7 @@ impl Record {
                 version: record_version,
                 nonce: record_nonce.into(),
             };
-            let mut segment_index: u64 = 0;
+            let mut segments = Vec::new();
             let mut data_buffer = Vec::<u8>::new();
 
             'segment_loop: loop {
@@ -348,14 +356,14 @@ impl Record {
                     hashed_record_key: hashed_key.clone(),
                     fragment_parameters: KdfUsageFragmentParameters {
                         record_parameters: record_parameters.clone(),
-                        segment_index: segment_index.into(),
+                        segment_index: (segments.len() as u64).into(),
                     },
                 };
                 let fragment_file_name =
                     fragment_key.derive_file_name(&registry.config.kdf).await?;
                 let fragment_path = registry.get_fragment_path(&fragment_file_name);
 
-                let segment_result: Result<Segment> = try {
+                let segment_result: Result<FragmentReadSuccess> = try {
                     let fragment_file = File::open(&fragment_path).await?;
                     let fragment_file_guard = fragment_file.lock_read().await?;
 
@@ -379,7 +387,7 @@ impl Record {
                 let segment = match segment_result {
                     Ok(segment) => segment,
                     Err(error) => {
-                        if segment_index == 0 {
+                        if segments.is_empty() {
                             errors.push(error);
                             continue 'collision_resolution_loop;
                         } else {
@@ -390,11 +398,15 @@ impl Record {
 
                 data_buffer.extend_from_slice(&segment.data);
 
+                segments.push(RecordReadVersionSuccessSegment {
+                    segment_bytes: segment.data.len(),
+                    fragment_file_name,
+                    fragment_encryption_algorithm: segment.encryption_algorithm,
+                });
+
                 if segment.metadata.get_last()? {
                     break 'segment_loop;
                 }
-
-                segment_index += 1;
             }
 
             let record = coset::cbor::from_reader::<Self, _>(Cursor::new(&data_buffer))
@@ -402,9 +414,10 @@ impl Record {
 
             info!(%record_nonce, "Record read successfully");
 
-            return Ok(Some(RecordReadVersionResult {
+            return Ok(Some(RecordReadVersionSuccess {
                 record,
                 record_nonce: record_nonce.into(),
+                segments,
             }));
         }
 

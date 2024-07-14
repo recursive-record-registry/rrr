@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
+    cbor::SerializeExt,
     record::{HashedRecordKey, RecordKey, RecordName},
     registry::Registry,
 };
@@ -10,6 +11,8 @@ use color_eyre::{
     Result,
 };
 use futures::TryStreamExt;
+use itertools::Itertools;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about)]
@@ -19,17 +22,43 @@ pub struct RrrArgs {
     #[arg(short('d'), long, default_value = ".")]
     pub registry_directory: PathBuf,
     #[command(subcommand)]
-    pub command: RrrCommand,
+    pub command: RrrCommandKind,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum RrrCommand {
-    /// Display information about the registry.
-    Info {},
+pub enum RrrCommandKind {
+    Registry {
+        #[command(subcommand)]
+        subcommand: RrrSubcommandRegistry,
+    },
+    Record {
+        #[command(subcommand)]
+        subcommand: RrrSubcommandRecord,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum RrrSubcommandRegistry {
+    /// Read the metadata of the registry.
+    Info,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum RrrSubcommandRecord {
     /// List versions of a record.
     ListVersions {
         #[command(flatten)]
-        record_args: RrrArgsRecordCommand,
+        record_path_args: RrrArgsRecordPath,
+    },
+    /// Read the metadata of the record.
+    Info {
+        // TODO: Option for the latest version, default.
+        /// The version of the record to open.
+        /// See [`ListVersions`].
+        #[arg(short('v'), long)]
+        record_version: u64,
+        #[command(flatten)]
+        record_path_args: RrrArgsRecordPath,
     },
     /// Read the specified record version from the registry.
     Read {
@@ -39,12 +68,12 @@ pub enum RrrCommand {
         #[arg(short('v'), long)]
         record_version: u64,
         #[command(flatten)]
-        record_args: RrrArgsRecordCommand,
+        record_path_args: RrrArgsRecordPath,
     },
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct RrrArgsRecordCommand {
+pub struct RrrArgsRecordPath {
     /// How many attempts should be performed to resolve file name collisions.
     /// A higher value may be necessary for registries with short fragment file names.
     /// The default value of 4 is conservative for registries with fragment file names
@@ -64,27 +93,22 @@ pub struct RrrArgsRecordCommand {
     pub record_names: Vec<String>,
 }
 
-impl RrrArgsRecordCommand {
-    async fn resolve_record_path<L>(&self, registry: &Registry<L>) -> Result<HashedRecordKey> {
-        let record_names = {
-            let mut result = Vec::new();
+impl RrrArgsRecordPath {
+    async fn parse_record_path(&self) -> Result<Vec<RecordName>> {
+        let mut result = Vec::new();
 
-            if !self.no_prepend_root_record_name {
-                result.push(Default::default());
-            }
+        if !self.no_prepend_root_record_name {
+            result.push(Default::default());
+        }
 
-            for record_name in &self.record_names {
-                result.push(
-                    self.record_name_format
-                        .convert_record_name_to_bytes(record_name)?,
-                );
-            }
+        for record_name in &self.record_names {
+            result.push(
+                self.record_name_format
+                    .convert_record_name_to_bytes(record_name)?,
+            );
+        }
 
-            result
-        };
-        let hashed_record_key = resolve_path(registry, record_names).await?;
-
-        Ok(hashed_record_key)
+        Ok(result)
     }
 }
 
@@ -115,18 +139,19 @@ impl RecordNameFormat {
 
 async fn resolve_path<L>(
     registry: &Registry<L>,
-    record_names: Vec<RecordName>,
+    record_names: &[RecordName],
 ) -> color_eyre::Result<HashedRecordKey> {
-    let mut record_names_iter = record_names.into_iter();
+    let mut record_names_iter = record_names.iter();
     let hashed_record_key_root = RecordKey {
         record_name: record_names_iter
             .next()
+            .cloned()
             .ok_or_eyre("No record name specified")?,
         predecessor_nonce: registry.config.kdf.get_root_record_predecessor_nonce(),
     }
     .hash(&registry.config.hash)
     .await?;
-    let predecessor_nonce = futures::stream::iter(record_names_iter.map(Ok))
+    let predecessor_nonce = futures::stream::iter(record_names_iter.cloned().map(Ok))
         .try_fold(
             hashed_record_key_root,
             async |hashed_record_key: HashedRecordKey, record_name| {
@@ -149,33 +174,93 @@ async fn resolve_path<L>(
 impl RrrArgs {
     pub async fn process(self) -> color_eyre::Result<()> {
         match self.command {
-            RrrCommand::Info {} => {
-                let registry = Registry::open(self.registry_directory).await?;
+            RrrCommandKind::Registry { subcommand } => match subcommand {
+                RrrSubcommandRegistry::Info => {
+                    let registry = Registry::open(self.registry_directory).await?;
 
-                println!("{registry:#?}");
-            }
-            RrrCommand::ListVersions { record_args } => {
-                let registry = Registry::open(self.registry_directory).await?;
-                let hashed_record_key = record_args.resolve_record_path(&registry).await?;
+                    println!("{registry:#?}");
+                }
+            },
+            RrrCommandKind::Record { subcommand } => match subcommand {
+                RrrSubcommandRecord::ListVersions { record_path_args } => {
+                    let registry = Registry::open(self.registry_directory).await?;
+                    let record_names = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
 
-                bail!("Not yet implemented");
-            }
-            RrrCommand::Read {
-                record_version,
-                record_args,
-            } => {
-                let registry = Registry::open(self.registry_directory).await?;
-                let hashed_record_key = record_args.resolve_record_path(&registry).await?;
-                let record = registry
-                    .load_record(
-                        &hashed_record_key,
-                        record_version.into(),
-                        record_args.max_collision_resolution_attempts,
-                    )
-                    .await?;
+                    bail!("Not yet implemented");
+                }
+                RrrSubcommandRecord::Info {
+                    record_version,
+                    record_path_args,
+                } => {
+                    let registry = Registry::open(self.registry_directory).await?;
+                    let record_names = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
+                    let record = registry
+                        .load_record(
+                            &hashed_record_key,
+                            record_version.into(),
+                            record_path_args.max_collision_resolution_attempts,
+                        )
+                        .await?
+                        .ok_or_eyre("record not found")?;
 
-                println!("{record:#?}");
-            }
+                    println!("# Record parameters");
+                    println!("- path:          {}", record_names.iter().format(" "));
+                    println!("- name:          {}", record_names.last().unwrap());
+                    println!("- version:       {}", record_version);
+                    println!("- nonce:         {}", *record.record_nonce);
+                    println!("- content bytes: {}", record.data.len());
+                    println!(
+                        "- total bytes:   {}",
+                        record
+                            .segments
+                            .iter()
+                            .map(|segment| segment.segment_bytes)
+                            .sum::<usize>()
+                    );
+                    println!("# Segments");
+
+                    for segment in &record.segments {
+                        println!("- {}", segment.fragment_file_name);
+                        println!("  - content bytes: {}", segment.segment_bytes);
+                        println!(
+                            "  - enc. alg.:     {}",
+                            segment
+                                .fragment_encryption_algorithm
+                                .map(|alg| alg.to_string())
+                                .unwrap_or_else(|| "none".to_string())
+                        );
+                    }
+
+                    println!("# Record metadata");
+
+                    for (key, value) in record.metadata.iter() {
+                        let key_diag = cbor_diag::parse_bytes(key.as_cbor_bytes()?)?.to_diag();
+                        let value_diag = cbor_diag::parse_bytes(value.as_cbor_bytes()?)?.to_diag();
+
+                        println!("- {key_diag}: {value_diag}");
+                    }
+                }
+                RrrSubcommandRecord::Read {
+                    record_version,
+                    record_path_args,
+                } => {
+                    let registry = Registry::open(self.registry_directory).await?;
+                    let record_names = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
+                    let record = registry
+                        .load_record(
+                            &hashed_record_key,
+                            record_version.into(),
+                            record_path_args.max_collision_resolution_attempts,
+                        )
+                        .await?
+                        .ok_or_eyre("record not found")?;
+
+                    tokio::io::stdout().write_all(&record.data).await?;
+                }
+            },
         }
 
         Ok(())

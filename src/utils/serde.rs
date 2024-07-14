@@ -6,7 +6,7 @@ use std::{
     ops::Deref,
 };
 
-use derive_more::{Deref, DerefMut};
+use derive_more::{Deref, DerefMut, From};
 use hex_buffer_serde::{ConstHex, Hex};
 use itertools::Itertools;
 use proptest::{
@@ -376,6 +376,7 @@ where
     PartialOrd,
     Serialize,
     Zeroize,
+    From,
 )]
 #[serde(transparent)]
 pub struct BytesOrAscii<T, const DEBUG_TRIM_LEN: usize = { usize::MAX }>(
