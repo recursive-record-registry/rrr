@@ -1,15 +1,14 @@
-use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
 use rrr::record::segment::{RecordNonce, RecordVersion};
-use rrr::record::{RecordData, RecordName, SuccessionNonce};
-use rrr::utils::serde::{BytesOrAscii, BytesOrHexString};
+use rrr::record::{RecordName, SuccessionNonce};
+use rrr::utils::serde::BytesOrHexString;
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,
-    record::{HashedRecordKey, Record, RecordKey, RecordMetadata},
+    record::{HashedRecordKey, Record, RecordKey},
     registry::Registry,
 };
 use tempfile::tempdir;
@@ -22,7 +21,7 @@ mod util;
 #[derive(Debug)]
 pub struct RecordTestNode {
     record_name: RecordName,
-    version_contents: Vec<RecordData>,
+    record_versions: Vec<Record>,
     successors: Vec<RecordTestNode>,
 }
 
@@ -31,14 +30,13 @@ prop_compose! {
     fn arb_record_test_leaf(
         max_duplicates: usize,
         max_record_name_bytes: usize,
-        max_content_bytes: usize,
     )(
         record_name_bytes in vec(any::<u8>(), 0..max_record_name_bytes),
-        version_contents in vec(vec(any::<u8>(), 0..max_content_bytes), 1..=(max_duplicates + 1)),
+        record_versions in vec(any::<Record>(), 1..=(max_duplicates + 1)),
     ) -> RecordTestNode {
         RecordTestNode {
             record_name: RecordName::from(record_name_bytes),
-            version_contents: version_contents.into_iter().map(BytesOrAscii).collect(),
+            record_versions,
             successors: vec![],
         }
     }
@@ -51,12 +49,12 @@ fn arb_record_test_tree(
     expected_branch_size: u32,
     max_duplicates: usize,
 ) -> impl Strategy<Value = RecordTestNode> {
-    let leaf = arb_record_test_leaf(max_duplicates, 256, 256);
+    let leaf = arb_record_test_leaf(max_duplicates, 256);
 
     leaf.prop_recursive(depth, desired_size, expected_branch_size, move |inner| {
         (
             vec(inner.clone(), 0..(expected_branch_size as usize)),
-            arb_record_test_leaf(max_duplicates, 256, 256),
+            arb_record_test_leaf(max_duplicates, 256),
         )
             .prop_map(|(successors, mut parent)| {
                 parent.successors = successors;
@@ -69,7 +67,7 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,
-    result: &'a mut Vec<(RecordKey, HashedRecordKey, RecordVersion, RecordData)>,
+    result: &'a mut Vec<(RecordKey, HashedRecordKey, RecordVersion, Record)>,
 ) -> BoxFuture<'a, ()> {
     async move {
         let record_key = RecordKey {
@@ -90,14 +88,12 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
             .await
             .unwrap();
 
-        for (record_version, version_contents) in
-            record_test_node.version_contents.iter().enumerate()
-        {
+        for (record_version, record) in record_test_node.record_versions.iter().enumerate() {
             result.push((
                 record_key.clone(),
                 hashed_record_key.clone(),
                 (record_version as u64).into(),
-                version_contents.clone(),
+                record.clone(),
             ));
         }
 
@@ -113,7 +109,7 @@ async fn hash_registry_tree<'a, L: std::fmt::Debug + Sync + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,
-) -> Vec<(RecordKey, HashedRecordKey, RecordVersion, RecordData)> {
+) -> Vec<(RecordKey, HashedRecordKey, RecordVersion, Record)> {
     let mut result = Vec::new();
     hash_registry_tree_recursive(registry, record_test_node, predecessor_nonce, &mut result).await;
     result
@@ -148,21 +144,10 @@ async fn prop_registry(
     let mut registry = Registry::create(registry_path.clone(), config, false)
         .await
         .unwrap();
-    let mut now = Utc::now();
     let record_keys = hash_registry_tree(&registry, &record_test_tree, None).await;
     let mut records = Vec::<(Record, RecordNonce)>::new();
 
-    for (_, hashed_record_key, record_version, record_data) in &record_keys {
-        let record = Record {
-            metadata: {
-                let mut metadata = RecordMetadata::default();
-                metadata.insert_created_at(now);
-                now += Duration::minutes(1);
-                metadata
-            },
-            data: record_data.clone(),
-        };
-
+    for (_, hashed_record_key, record_version, record) in &record_keys {
         let mut max_collision_resolution_attempts = 0;
 
         loop {
@@ -170,7 +155,7 @@ async fn prop_registry(
                 .save_record(
                     &signing_keys,
                     hashed_record_key,
-                    &record,
+                    record,
                     *record_version,
                     max_collision_resolution_attempts,
                     &[], // TODO
@@ -193,7 +178,7 @@ async fn prop_registry(
         };
 
         records.push((
-            record,
+            record.clone(),
             max_collision_resolution_attempts.into(),
         ));
     }
