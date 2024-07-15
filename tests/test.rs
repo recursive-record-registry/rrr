@@ -1,4 +1,3 @@
-use aes_gcm::aead::{rand_core::RngCore, OsRng};
 use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -6,7 +5,7 @@ use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
 use rrr::record::segment::{RecordNonce, RecordVersion};
-use rrr::record::{RecordName, SuccessionNonce};
+use rrr::record::{RecordData, RecordName, SuccessionNonce};
 use rrr::utils::serde::{BytesOrAscii, BytesOrHexString};
 use rrr::{
     crypto::encryption::EncryptionAlgorithm,
@@ -23,37 +22,41 @@ mod util;
 #[derive(Debug)]
 pub struct RecordTestNode {
     record_name: RecordName,
-    occurrences: usize,
+    version_contents: Vec<RecordData>,
     successors: Vec<RecordTestNode>,
 }
 
 prop_compose! {
-    fn arb_record_test(
+    /// A strategy for generating a leaf record.
+    fn arb_record_test_leaf(
         max_duplicates: usize,
+        max_record_name_bytes: usize,
+        max_content_bytes: usize,
     )(
-        bytes in vec(any::<u8>(), 0..256),
-        occurrences in 1..=(max_duplicates + 1),
+        record_name_bytes in vec(any::<u8>(), 0..max_record_name_bytes),
+        version_contents in vec(vec(any::<u8>(), 0..max_content_bytes), 1..=(max_duplicates + 1)),
     ) -> RecordTestNode {
         RecordTestNode {
-            record_name: RecordName::from(bytes),
-            occurrences,
+            record_name: RecordName::from(record_name_bytes),
+            version_contents: version_contents.into_iter().map(BytesOrAscii).collect(),
             successors: vec![],
         }
     }
 }
 
+/// A strategy for generating a tree of records.
 fn arb_record_test_tree(
     depth: u32,
     desired_size: u32,
     expected_branch_size: u32,
     max_duplicates: usize,
 ) -> impl Strategy<Value = RecordTestNode> {
-    let leaf = arb_record_test(max_duplicates);
+    let leaf = arb_record_test_leaf(max_duplicates, 256, 256);
 
     leaf.prop_recursive(depth, desired_size, expected_branch_size, move |inner| {
         (
             vec(inner.clone(), 0..(expected_branch_size as usize)),
-            arb_record_test(max_duplicates),
+            arb_record_test_leaf(max_duplicates, 256, 256),
         )
             .prop_map(|(successors, mut parent)| {
                 parent.successors = successors;
@@ -66,7 +69,7 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,
-    result: &'a mut Vec<(RecordKey, HashedRecordKey, RecordVersion)>,
+    result: &'a mut Vec<(RecordKey, HashedRecordKey, RecordVersion, RecordData)>,
 ) -> BoxFuture<'a, ()> {
     async move {
         let record_key = RecordKey {
@@ -87,11 +90,14 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
             .await
             .unwrap();
 
-        for record_version in 0..record_test_node.occurrences {
+        for (record_version, version_contents) in
+            record_test_node.version_contents.iter().enumerate()
+        {
             result.push((
                 record_key.clone(),
                 hashed_record_key.clone(),
                 (record_version as u64).into(),
+                version_contents.clone(),
             ));
         }
 
@@ -107,7 +113,7 @@ async fn hash_registry_tree<'a, L: std::fmt::Debug + Sync + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,
-) -> Vec<(RecordKey, HashedRecordKey, RecordVersion)> {
+) -> Vec<(RecordKey, HashedRecordKey, RecordVersion, RecordData)> {
     let mut result = Vec::new();
     hash_registry_tree_recursive(registry, record_test_node, predecessor_nonce, &mut result).await;
     result
@@ -138,7 +144,6 @@ async fn prop_registry(
 
     dbg!(&registry_dir);
 
-    let mut csprng = OsRng;
     let registry_path = registry_dir.path().to_path_buf();
     let mut registry = Registry::create(registry_path.clone(), config, false)
         .await
@@ -147,7 +152,7 @@ async fn prop_registry(
     let record_keys = hash_registry_tree(&registry, &record_test_tree, None).await;
     let mut records = Vec::<(Record, RecordNonce)>::new();
 
-    for (_, hashed_record_key, record_version) in &record_keys {
+    for (_, hashed_record_key, record_version, record_data) in &record_keys {
         let record = Record {
             metadata: {
                 let mut metadata = RecordMetadata::default();
@@ -155,11 +160,7 @@ async fn prop_registry(
                 now += Duration::minutes(1);
                 metadata
             },
-            data: {
-                let mut data = [0_u8; 32];
-                csprng.fill_bytes(&mut data);
-                BytesOrAscii(data.into())
-            },
+            data: record_data.clone(),
         };
 
         let mut max_collision_resolution_attempts = 0;
@@ -210,7 +211,7 @@ async fn prop_registry(
 
         let mut loaded_records = Vec::new();
 
-        for ((_, hashed_record_key, record_version), &record_nonce) in record_keys.iter().zip(records.iter().map(|(_, record_nonce)| record_nonce)) {
+        for ((_, hashed_record_key, record_version, _), &record_nonce) in record_keys.iter().zip(records.iter().map(|(_, record_nonce)| record_nonce)) {
             if *record_nonce > 0 {
                 let result = loaded_registry
                     .load_record(
