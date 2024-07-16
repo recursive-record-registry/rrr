@@ -217,7 +217,7 @@ impl Record {
                     let fragment_file_guard = fragment_file.lock_read().await?;
                     let segment = Segment::read_fragment(
                         &registry.config.verifying_keys,
-                        &registry.config.kdf,
+                        &registry.config,
                         fragment_file_guard,
                         &fragment_key,
                     )
@@ -414,7 +414,7 @@ impl Record {
             segment
                 .write_fragment(
                     signing_keys,
-                    &registry.config.kdf,
+                    &registry.config,
                     &mut fragment_file_guard,
                     fragment_key,
                     encryption_algorithm,

@@ -5,7 +5,7 @@ use crate::crypto::encryption::{Decrypt, Encrypt, EncryptionAlgorithm};
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
-use crate::registry::RegistryConfigKdf;
+use crate::registry::{RegistryConfig, RegistryConfigKdf};
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_scoped::TokioScope;
 use coset::cbor::tag;
@@ -22,9 +22,10 @@ use proptest::prop_compose;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::io::Cursor;
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite};
 use tokio_util::io::SyncIoBridge;
 use tracing::warn;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -354,7 +355,7 @@ impl<'a> From<&'a Segment> for SegmentSerde<'a> {
 impl Segment {
     pub async fn read_fragment(
         verifying_keys: &[VerifyingKey],
-        kdf_params: &RegistryConfigKdf,
+        config: &RegistryConfig,
         mut read: impl AsyncRead + Unpin + Send,
         fragment_key: &FragmentKey,
     ) -> Result<FragmentReadSuccess> {
@@ -432,7 +433,7 @@ impl Segment {
                             })
                     })?;
                 let encryption_key = fragment_key
-                    .derive_encryption_key(kdf_params, &encryption_algorithm)
+                    .derive_encryption_key(&config.kdf, &encryption_algorithm)
                     .await?;
                 let plaintext = encrypted.decrypt(
                     &[],
@@ -441,7 +442,22 @@ impl Segment {
                         key: &encryption_key,
                     },
                 )?;
-                let plaintext_value = cbor::Value::from_slice(&plaintext).map_err(Error::Coset)?;
+
+                if plaintext.len() != *config.encryption.segment_padding_to_bytes as usize {
+                    return Err(Error::MalformedFragment);
+                }
+
+                let mut plaintext_cursor = Cursor::new(plaintext.as_slice());
+                let plaintext_value: cbor::Value =
+                    coset::cbor::de::from_reader(&mut plaintext_cursor).map_err(Error::CborDe)?;
+
+                if (plaintext_cursor.position() as usize) < plaintext.len() {
+                    for byte in &plaintext[plaintext_cursor.position() as usize..] {
+                        if *byte != 0 {
+                            return Err(Error::MalformedFragment);
+                        }
+                    }
+                }
 
                 (plaintext_value, Some(encryption_algorithm))
             }
@@ -462,8 +478,8 @@ impl Segment {
     pub async fn write_fragment(
         &self,
         signing_keys: &[SigningKey],
-        kdf_params: &RegistryConfigKdf,
-        write: impl AsyncWrite + Unpin + Send,
+        config: &RegistryConfig,
+        write: impl AsyncWrite + AsyncSeek + Unpin + Send,
         fragment_key: &FragmentKey,
         encryption_algorithm: Option<&EncryptionAlgorithm>,
     ) -> Result<()> {
@@ -471,9 +487,25 @@ impl Segment {
 
         // Encrypt the fragment data, if an encryption algorithm was provided.
         let output_value = if let Some(encryption_algorithm) = encryption_algorithm {
-            let plaintext = output_value.to_vec().map_err(Error::Coset)?;
+            let plaintext = {
+                let mut plaintext = output_value.to_vec().map_err(Error::Coset)?;
+                let padding_length = u64::try_from(plaintext.len())
+                    .ok()
+                    .and_then(|plaintext_length| {
+                        config
+                            .encryption
+                            .segment_padding_to_bytes
+                            .checked_sub(plaintext_length)
+                    })
+                    .ok_or_else(|| Error::SegmentTooLarge {
+                        length: plaintext.len() as u64,
+                        max_length: *config.encryption.segment_padding_to_bytes,
+                    })?;
+                plaintext.extend(std::iter::repeat(0_u8).take(padding_length as usize));
+                plaintext
+            };
             let encryption_key = fragment_key
-                .derive_encryption_key(kdf_params, encryption_algorithm)
+                .derive_encryption_key(&config.kdf, encryption_algorithm)
                 .await?;
             let encrypted = coset::CoseEncrypt0Builder::new()
                 .protected(

@@ -11,13 +11,11 @@ use rrr::{
     cbor::{SerializeExt, Value, ValueExt},
     crypto::encryption::EncryptionAlgorithm,
     record::{
-        segment::{
-            FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters,
-        },
+        segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters},
         Record, RecordKey,
     },
 };
-use std::{fs, path::Path};
+use std::{fs, io::Cursor, path::Path};
 use test_strategy::proptest;
 use tracing_test::traced_test;
 use util::{RegistryConfigWithSigningKeys, RegistryConfigWithSigningKeysAndSegment};
@@ -124,12 +122,12 @@ async fn verify_cddl_fragment(
             segment_index: 0.into(), // TODO
         },
     };
-    let mut fragment_bytes = Vec::<u8>::new();
+    let mut fragment_bytes = Cursor::new(Vec::<u8>::new());
 
     segment
         .write_fragment(
             &signing_keys,
-            &config.kdf,
+            &config,
             &mut fragment_bytes,
             &fragment_key,
             encryption_algorithm.as_ref(),
@@ -141,7 +139,7 @@ async fn verify_cddl_fragment(
 
     validate_with_cddl(
         "cddl/fragment.cddl",
-        Value::from_slice(&fragment_bytes).unwrap(),
+        Value::from_slice(&fragment_bytes.into_inner()).unwrap(),
     );
 }
 

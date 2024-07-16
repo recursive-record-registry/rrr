@@ -51,6 +51,8 @@ pub enum Error {
     InvalidParameter(#[from] InvalidParameterError),
     #[error("File tag mismatch")]
     FileTagMismatch,
+    #[error("Segment too large ({length} bytes) to store in a block of {max_length} bytes")]
+    SegmentTooLarge { length: u64, max_length: u64 },
 }
 
 impl<T> From<LockError<T>> for Error {

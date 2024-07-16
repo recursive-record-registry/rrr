@@ -29,7 +29,7 @@ Launch it by running the following:
 ## TODO
 * [ ] Splitting records into multiple files.
     * [x] Basic library implementation
-    * [ ] Pad contents to a registry-wide constant length.
+    * [x] Pad contents to a registry-wide constant length.
     * [ ] Record splitting strategies
     * [ ] Tests
     * [x] Command line implementation

@@ -21,7 +21,7 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Display;
-use std::ops::RangeInclusive;
+use std::ops::{Add, RangeInclusive};
 use std::{
     fmt::Debug,
     path::{Path, PathBuf},
@@ -189,6 +189,20 @@ where
     (P::MIN..=max).prop_map(ConfigParam)
 }
 
+impl<P> Arbitrary for ConfigParam<P>
+where
+    P: ConfigParamTrait + 'static,
+    P::T: Add<P::T, Output = P::T>,
+    RangeInclusive<P::T>: Strategy<Value = P::T>,
+{
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        arb_config_param(P::RECOMMENDED + P::RECOMMENDED).boxed()
+    }
+}
+
 macro_rules! define_config_params {
     ($($label:ident: $ty:ty = $recommended:literal >= $min:literal),+$(,)?) => {
         use stringify as Stringify;
@@ -213,32 +227,13 @@ define_config_params! {
     succession_nonce_length_in_bytes: u64 = 32 >= 16,
     file_name_length_in_bytes: u64 = 8 >= 1,
     file_tag_length_in_bytes: u64 = 32 >= 16,
+    segment_padding_to_bytes: u64 = 1024 >= 256,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigHash {
     pub algorithm: PasswordHashAlgorithm,
     pub output_length_in_bytes: ConfigParam<OutputLengthInBytes>, // TODO/FIXME: Bad type name
-}
-
-impl RegistryConfigHash {}
-
-prop_compose! {
-    fn arb_registry_config_hash()(
-        algorithm in any::<PasswordHashAlgorithm>(),
-        output_length_in_bytes in arb_config_param(128),
-    ) -> RegistryConfigHash {
-        RegistryConfigHash { algorithm, output_length_in_bytes }
-    }
-}
-
-impl Arbitrary for RegistryConfigHash {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        arb_registry_config_hash().boxed()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -318,8 +313,6 @@ impl RegistryConfigKdfBuilder {
     }
 }
 
-impl RegistryConfigKdfBuilder {}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigKdf {
     algorithm: KdfAlgorithm,
@@ -389,10 +382,16 @@ impl Arbitrary for RegistryConfigKdf {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistryConfigEncryption {
+    pub segment_padding_to_bytes: ConfigParam<SegmentPaddingToBytes>,
+}
+
 #[derive(Arbitrary, Clone, Debug, PartialEq, Eq)]
 pub struct RegistryConfig {
     pub hash: RegistryConfigHash,
     pub kdf: RegistryConfigKdf,
+    pub encryption: RegistryConfigEncryption,
     pub verifying_keys: Vec<VerifyingKey>,
 }
 
@@ -405,6 +404,7 @@ pub struct RegistryConfig {
 struct RegistryConfigSerde {
     hash: RegistryConfigHash,
     kdf: RegistryConfigKdf,
+    encryption: RegistryConfigEncryption,
     #[serde_as(as = "Vec<CoseKey>")]
     verifying_keys: Vec<VerifyingKey>,
 }
@@ -414,6 +414,7 @@ impl From<RegistryConfig> for RegistryConfigSerde {
         Self {
             hash: value.hash,
             kdf: value.kdf,
+            encryption: value.encryption,
             verifying_keys: value.verifying_keys,
         }
     }
@@ -424,6 +425,7 @@ impl From<RegistryConfigSerde> for RegistryConfig {
         Self {
             hash: value.hash,
             kdf: value.kdf,
+            encryption: value.encryption,
             verifying_keys: value.verifying_keys,
         }
     }
