@@ -16,9 +16,9 @@ use coset::{
 };
 use derive_more::{Deref, DerefMut};
 use itertools::Itertools;
-use proptest::arbitrary::{any, Arbitrary};
+use proptest::arbitrary::any;
+use proptest::collection::vec;
 use proptest::prop_compose;
-use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -73,6 +73,15 @@ impl FragmentKey {
             .await
     }
 
+    pub async fn derive_file_tag(
+        &self,
+        kdf_params: &RegistryConfigKdf,
+    ) -> Result<FragmentFileTagBytes> {
+        self.hashed_record_key
+            .derive_fragment_file_tag(kdf_params, &self.fragment_parameters)
+            .await
+    }
+
     pub async fn derive_encryption_key(
         &self,
         kdf_params: &RegistryConfigKdf,
@@ -103,6 +112,7 @@ pub enum KdfUsage {
 pub enum KdfUsageFragmentUsage {
     EncryptionKey,
     FileName,
+    FileTag,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
@@ -194,9 +204,21 @@ impl DerefMut for FragmentEncryptionKeyBytes {
     }
 }
 
-pub struct HashedFragmentKey {
-    pub file_name: FragmentFileNameBytes,
-    pub encryption_key: FragmentEncryptionKeyBytes,
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
+pub struct FragmentFileTagBytes(pub BytesOrHexString<Box<[u8]>>);
+
+impl Deref for FragmentFileTagBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for FragmentFileTagBytes {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 /// A CBOR map of metadata.
@@ -204,7 +226,28 @@ pub struct HashedFragmentKey {
 pub struct SegmentMetadata(pub cbor::Map);
 
 impl SegmentMetadata {
-    pub const KEY_LAST: u64 = 1;
+    pub const KEY_FILE_TAG: u64 = 1;
+    pub const KEY_LAST: u64 = 2;
+
+    pub fn get_file_tag(&self) -> Result<FragmentFileTagBytes> {
+        let tag_bytes = self
+            .get(Self::KEY_FILE_TAG)
+            .ok_or(Error::MalformedSegment)?
+            .as_bytes()
+            .ok_or(Error::MalformedSegment)?
+            .clone()
+            .into();
+
+        Ok(FragmentFileTagBytes(BytesOrHexString(tag_bytes)))
+    }
+
+    pub fn insert_file_tag(&mut self, tag: FragmentFileTagBytes) -> Option<cbor::Value> {
+        self.insert(Self::KEY_FILE_TAG, cbor::Value::Bytes(tag.as_ref().into()))
+    }
+
+    pub fn shift_remove_file_tag(&mut self) -> Option<cbor::Value> {
+        self.shift_remove(Self::KEY_FILE_TAG)
+    }
 
     pub fn get_last(&self) -> Result<bool> {
         let Some(value) = self.get(Self::KEY_LAST) else {
@@ -225,10 +268,15 @@ impl SegmentMetadata {
 }
 
 prop_compose! {
-    fn arb_segment_metadata()(
+    pub fn arb_segment_metadata(
+        kdf: &RegistryConfigKdf,
+    )(
+        file_tag in vec(any::<u8>(), kdf.get_file_tag_length_in_bytes() as usize),
         last in any::<bool>(),
     ) -> SegmentMetadata {
         let mut result = SegmentMetadata::default();
+
+        result.insert_file_tag(FragmentFileTagBytes(BytesOrHexString(file_tag.into())));
 
         if last {
             result.insert_last();
@@ -238,25 +286,29 @@ prop_compose! {
     }
 }
 
-impl Arbitrary for SegmentMetadata {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        arb_segment_metadata().boxed()
-    }
-}
-
 pub type SegmentData = BytesOrAscii<Vec<u8>, 32>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SegmentSerde<'a>(Cow<'a, SegmentMetadata>, Cow<'a, SegmentData>);
 
 /// A record, loaded from its CBOR representation.
-#[derive(Arbitrary, Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Segment {
     pub metadata: SegmentMetadata,
     pub data: SegmentData,
+}
+
+prop_compose! {
+    pub fn arb_segment(
+        kdf: &RegistryConfigKdf,
+    )(
+        metadata in arb_segment_metadata(kdf),
+        data in any::<SegmentData>(),
+    ) -> Segment {
+        Segment {
+            metadata, data
+        }
+    }
 }
 
 impl Serialize for Segment {

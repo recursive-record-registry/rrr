@@ -209,19 +209,26 @@ impl Record {
                 };
                 let fragment_file_name =
                     fragment_key.derive_file_name(&registry.config.kdf).await?;
+                let fragment_file_tag = fragment_key.derive_file_tag(&registry.config.kdf).await?;
                 let fragment_path = registry.get_fragment_path(&fragment_file_name);
 
                 let segment_result: Result<FragmentReadSuccess> = try {
                     let fragment_file = File::open(&fragment_path).await?;
                     let fragment_file_guard = fragment_file.lock_read().await?;
-
-                    Segment::read_fragment(
+                    let segment = Segment::read_fragment(
                         &registry.config.verifying_keys,
                         &registry.config.kdf,
                         fragment_file_guard,
                         &fragment_key,
                     )
-                    .await?
+                    .await?;
+                    let found_file_tag = segment.metadata.get_file_tag()?;
+
+                    if found_file_tag != fragment_file_tag {
+                        Err(Error::FileTagMismatch)?;
+                    }
+
+                    segment
                 };
 
                 trace!(
@@ -273,7 +280,7 @@ impl Record {
             if let Error::Io(error) = error {
                 error.kind() != io::ErrorKind::NotFound
             } else {
-                true
+                !matches!(error, &Error::FileTagMismatch)
             }
         });
 
@@ -366,7 +373,7 @@ impl Record {
                     );
 
                     if collides_with_existing_fragment {
-                        // TODO: Check whether the colliding file is actually encrypted with the same key?
+                        // TODO: Check whether the colliding file has the same fragment file tag?
                         continue 'next_nonce;
                     }
 
@@ -392,6 +399,8 @@ impl Record {
             let segment = Segment {
                 metadata: {
                     let mut metadata = SegmentMetadata::default();
+                    metadata
+                        .insert_file_tag(fragment_key.derive_file_tag(&registry.config.kdf).await?);
                     if segment_index == segment_sizes.len() - 1 {
                         metadata.insert_last();
                     }

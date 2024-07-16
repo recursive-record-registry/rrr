@@ -9,7 +9,7 @@ RRR_KdfUsage_SuccessionNonce = (
 
 RRR_KdfUsage_Fragment = (
     fragment: {
-        usage: "encryption_key" / "file_name",
+        usage: "encryption_key" / "file_name" / "file_tag",
         parameters: {
             record_nonce: uint,
             segment_index: uint,

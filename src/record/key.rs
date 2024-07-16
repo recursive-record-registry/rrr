@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use super::segment::FragmentFileTagBytes;
 use super::{RecordName, SuccessionNonce};
 
 #[derive(Clone, Debug, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -125,6 +126,23 @@ impl HashedRecordKey {
         self.derive_key(&usage, kdf_params, &mut okm).await?;
 
         Ok(FragmentFileNameBytes(BytesOrHexString(okm)))
+    }
+
+    pub async fn derive_fragment_file_tag(
+        &self,
+        kdf_params: &RegistryConfigKdf,
+        fragment_parameters: &KdfUsageFragmentParameters,
+    ) -> Result<FragmentFileTagBytes> {
+        let mut okm =
+            vec![0_u8; kdf_params.get_file_tag_length_in_bytes() as usize].into_boxed_slice();
+        let usage = KdfUsage::Fragment {
+            usage: KdfUsageFragmentUsage::FileTag,
+            parameters: fragment_parameters.clone(),
+        };
+
+        self.derive_key(&usage, kdf_params, &mut okm).await?;
+
+        Ok(FragmentFileTagBytes(BytesOrHexString(okm)))
     }
 
     pub async fn derive_fragment_encryption_key(

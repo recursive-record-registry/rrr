@@ -10,15 +10,17 @@ use itertools::Itertools;
 use rrr::{
     cbor::{SerializeExt, Value, ValueExt},
     crypto::encryption::EncryptionAlgorithm,
-    record::segment::{
-        FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters, Segment,
+    record::{
+        segment::{
+            FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters,
+        },
+        Record, RecordKey,
     },
-    record::{Record, RecordKey},
 };
 use std::{fs, path::Path};
 use test_strategy::proptest;
 use tracing_test::traced_test;
-use util::RegistryConfigWithSigningKeys;
+use util::{RegistryConfigWithSigningKeys, RegistryConfigWithSigningKeysAndSegment};
 
 mod util;
 
@@ -88,21 +90,25 @@ fn verify_cddl_registry(config_with_signing_keys: RegistryConfigWithSigningKeys)
 
 #[proptest]
 #[traced_test]
-fn verify_cddl_segment(segment: Segment) {
+fn verify_cddl_segment(args: RegistryConfigWithSigningKeysAndSegment) {
+    let RegistryConfigWithSigningKeysAndSegment { segment, .. } = args;
     validate_with_cddl("cddl/segment.cddl", Value::serialized(&segment).unwrap());
 }
 
 #[proptest(async = "tokio")]
 #[traced_test]
 async fn verify_cddl_fragment(
-    config_with_signing_keys: RegistryConfigWithSigningKeys,
-    segment: Segment,
+    args: RegistryConfigWithSigningKeysAndSegment,
     encryption_algorithm: Option<EncryptionAlgorithm>,
 ) {
-    let RegistryConfigWithSigningKeys {
-        config,
-        signing_keys,
-    } = config_with_signing_keys;
+    let RegistryConfigWithSigningKeysAndSegment {
+        registry_config_with_signing_keys:
+            RegistryConfigWithSigningKeys {
+                config,
+                signing_keys,
+            },
+        segment,
+    } = args;
     let record_key = RecordKey {
         record_name: Default::default(),
         predecessor_nonce: config.kdf.get_root_record_predecessor_nonce().clone(),

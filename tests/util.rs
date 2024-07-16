@@ -2,15 +2,16 @@ use proptest::{
     arbitrary::{any, Arbitrary},
     collection::vec,
     prop_compose,
-    strategy::{BoxedStrategy, Strategy},
+    strategy::{BoxedStrategy, Just, Strategy},
 };
 use rrr::{
     crypto::signature::{SigningKey, VerifyingKey},
+    record::segment::{arb_segment, Segment},
     registry::RegistryConfig,
 };
 
 #[allow(unused)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RegistryConfigWithSigningKeys {
     pub signing_keys: Vec<SigningKey>,
     pub config: RegistryConfig,
@@ -37,5 +38,35 @@ impl Arbitrary for RegistryConfigWithSigningKeys {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         arb_registry_config_with_signing_keys().boxed()
+    }
+}
+
+#[allow(unused)]
+#[derive(Debug)]
+pub struct RegistryConfigWithSigningKeysAndSegment {
+    pub registry_config_with_signing_keys: RegistryConfigWithSigningKeys,
+    pub segment: Segment,
+}
+
+prop_compose! {
+    fn arb_registry_config_with_signing_keys_and_segment()(
+        registry_config_with_signing_keys in any::<RegistryConfigWithSigningKeys>(),
+    )(
+        segment in arb_segment(&registry_config_with_signing_keys.config.kdf),
+        registry_config_with_signing_keys in Just(registry_config_with_signing_keys),
+    ) -> RegistryConfigWithSigningKeysAndSegment {
+        RegistryConfigWithSigningKeysAndSegment {
+            registry_config_with_signing_keys,
+            segment,
+        }
+    }
+}
+
+impl Arbitrary for RegistryConfigWithSigningKeysAndSegment {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        arb_registry_config_with_signing_keys_and_segment().boxed()
     }
 }

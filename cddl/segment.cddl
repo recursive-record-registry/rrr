@@ -15,10 +15,12 @@ RRR_SegmentMetadata = {
 }
 
 RRR_SegmentMetadataRegistered = (
+    RRR_SegmentMetadataRegistered_file_tag ^=> bstr, ; .size (32..10000),
     ? RRR_SegmentMetadataRegistered_last ^=> bool,
 )
 
-RRR_SegmentMetadataRegistered_last = 1  ; last -- This is the last segment of the record.
+RRR_SegmentMetadataRegistered_file_tag = 1   ; file_tag -- Used to verify fragment's association to a record
+RRR_SegmentMetadataRegistered_last = 2  ; last -- This is the last segment of the record.
 
 ;
 ; CBOR Object Signing and Encryption (COSE)

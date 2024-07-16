@@ -49,6 +49,8 @@ pub enum Error {
     CollisionResolutionFailed,
     #[error(transparent)]
     InvalidParameter(#[from] InvalidParameterError),
+    #[error("File tag mismatch")]
+    FileTagMismatch,
 }
 
 impl<T> From<LockError<T>> for Error {
