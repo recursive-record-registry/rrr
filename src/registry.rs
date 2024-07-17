@@ -1,10 +1,11 @@
 use crate::cbor::{TAG_RRR_REGISTRY, TAG_SELF_DESCRIBED_CBOR};
-use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, InvalidParameterError, OptionExt, Result};
-use crate::record::segment::{FragmentFileNameBytes, RecordNonce, RecordVersion};
+use crate::record::segment::{
+    FragmentFileNameBytes, RecordNonce, RecordVersion, SegmentEncryption,
+};
 use crate::record::{HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce};
 use crate::utils::serde::{BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
@@ -382,16 +383,10 @@ impl Arbitrary for RegistryConfigKdf {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RegistryConfigEncryption {
-    pub segment_padding_to_bytes: ConfigParam<SegmentPaddingToBytes>,
-}
-
 #[derive(Arbitrary, Clone, Debug, PartialEq, Eq)]
 pub struct RegistryConfig {
     pub hash: RegistryConfigHash,
     pub kdf: RegistryConfigKdf,
-    pub encryption: RegistryConfigEncryption,
     pub verifying_keys: Vec<VerifyingKey>,
 }
 
@@ -404,7 +399,6 @@ pub struct RegistryConfig {
 struct RegistryConfigSerde {
     hash: RegistryConfigHash,
     kdf: RegistryConfigKdf,
-    encryption: RegistryConfigEncryption,
     #[serde_as(as = "Vec<CoseKey>")]
     verifying_keys: Vec<VerifyingKey>,
 }
@@ -414,7 +408,6 @@ impl From<RegistryConfig> for RegistryConfigSerde {
         Self {
             hash: value.hash,
             kdf: value.kdf,
-            encryption: value.encryption,
             verifying_keys: value.verifying_keys,
         }
     }
@@ -425,7 +418,6 @@ impl From<RegistryConfigSerde> for RegistryConfig {
         Self {
             hash: value.hash,
             kdf: value.kdf,
-            encryption: value.encryption,
             verifying_keys: value.verifying_keys,
         }
     }
@@ -655,7 +647,7 @@ impl Registry<WriteLock> {
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
         split_at: &[usize],
-        encryption_algorithm: Option<&EncryptionAlgorithm>,
+        encryption: Option<&SegmentEncryption>,
         overwrite: bool,
     ) -> Result<RecordNonce> {
         let open_options = {
@@ -676,7 +668,7 @@ impl Registry<WriteLock> {
                 record_version,
                 max_collision_resolution_attempts,
                 split_at,
-                encryption_algorithm,
+                encryption,
                 &open_options,
             )
             .await

@@ -3,11 +3,10 @@ use futures::FutureExt;
 use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
-use rrr::record::segment::{RecordNonce, RecordVersion};
+use rrr::record::segment::{RecordNonce, RecordVersion, SegmentEncryption};
 use rrr::record::{RecordName, SuccessionNonce};
 use rrr::utils::serde::BytesOrHexString;
 use rrr::{
-    crypto::encryption::EncryptionAlgorithm,
     record::{HashedRecordKey, Record, RecordKey},
     registry::Registry,
 };
@@ -128,7 +127,7 @@ async fn prop_registry(
     config_with_signing_keys: RegistryConfigWithSigningKeys,
     #[strategy(arb_record_test_tree(3, 16, 3, 2))]
     record_test_tree: RecordTestNode,
-    encryption_algorithm: Option<EncryptionAlgorithm>,
+    encryption: Option<SegmentEncryption>,
 ) {
     dbg!(&record_test_tree);
 
@@ -159,7 +158,7 @@ async fn prop_registry(
                     *record_version,
                     max_collision_resolution_attempts,
                     &[], // TODO
-                    encryption_algorithm.as_ref(), // TODO
+                    encryption.as_ref(), // TODO
                     false,
                 )
                 .await;

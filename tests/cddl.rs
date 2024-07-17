@@ -9,9 +9,10 @@ use coset::CborSerializable;
 use itertools::Itertools;
 use rrr::{
     cbor::{SerializeExt, Value, ValueExt},
-    crypto::encryption::EncryptionAlgorithm,
     record::{
-        segment::{FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters},
+        segment::{
+            FragmentKey, KdfUsage, KdfUsageFragmentParameters, RecordParameters, SegmentEncryption,
+        },
         Record, RecordKey,
     },
 };
@@ -97,7 +98,7 @@ fn verify_cddl_segment(args: RegistryConfigWithSigningKeysAndSegment) {
 #[traced_test]
 async fn verify_cddl_fragment(
     args: RegistryConfigWithSigningKeysAndSegment,
-    encryption_algorithm: Option<EncryptionAlgorithm>,
+    encryption: Option<SegmentEncryption>,
 ) {
     let RegistryConfigWithSigningKeysAndSegment {
         registry_config_with_signing_keys:
@@ -127,10 +128,10 @@ async fn verify_cddl_fragment(
     segment
         .write_fragment(
             &signing_keys,
-            &config,
+            &config.kdf,
             &mut fragment_bytes,
             &fragment_key,
-            encryption_algorithm.as_ref(),
+            encryption.as_ref(),
         )
         .await
         .unwrap();

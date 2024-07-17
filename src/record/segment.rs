@@ -5,7 +5,7 @@ use crate::crypto::encryption::{Decrypt, Encrypt, EncryptionAlgorithm};
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
-use crate::registry::{RegistryConfig, RegistryConfigKdf};
+use crate::registry::RegistryConfigKdf;
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_scoped::TokioScope;
 use coset::cbor::tag;
@@ -355,7 +355,7 @@ impl<'a> From<&'a Segment> for SegmentSerde<'a> {
 impl Segment {
     pub async fn read_fragment(
         verifying_keys: &[VerifyingKey],
-        config: &RegistryConfig,
+        kdf_params: &RegistryConfigKdf,
         mut read: impl AsyncRead + Unpin + Send,
         fragment_key: &FragmentKey,
     ) -> Result<FragmentReadSuccess> {
@@ -433,7 +433,7 @@ impl Segment {
                             })
                     })?;
                 let encryption_key = fragment_key
-                    .derive_encryption_key(&config.kdf, &encryption_algorithm)
+                    .derive_encryption_key(kdf_params, &encryption_algorithm)
                     .await?;
                 let plaintext = encrypted.decrypt(
                     &[],
@@ -442,10 +442,6 @@ impl Segment {
                         key: &encryption_key,
                     },
                 )?;
-
-                if plaintext.len() != *config.encryption.segment_padding_to_bytes as usize {
-                    return Err(Error::MalformedFragment);
-                }
 
                 let mut plaintext_cursor = Cursor::new(plaintext.as_slice());
                 let plaintext_value: cbor::Value =
@@ -478,41 +474,38 @@ impl Segment {
     pub async fn write_fragment(
         &self,
         signing_keys: &[SigningKey],
-        config: &RegistryConfig,
+        kdf_params: &RegistryConfigKdf,
         write: impl AsyncWrite + AsyncSeek + Unpin + Send,
         fragment_key: &FragmentKey,
-        encryption_algorithm: Option<&EncryptionAlgorithm>,
+        encryption_algorithm: Option<&SegmentEncryption>,
     ) -> Result<()> {
         let output_value = cbor::Value::serialized(self).map_err(Error::Cbor)?;
 
         // Encrypt the fragment data, if an encryption algorithm was provided.
-        let output_value = if let Some(encryption_algorithm) = encryption_algorithm {
+        let output_value = if let Some(encryption) = encryption_algorithm {
             let plaintext = {
                 let mut plaintext = output_value.to_vec().map_err(Error::Coset)?;
                 let padding_length = u64::try_from(plaintext.len())
                     .ok()
                     .and_then(|plaintext_length| {
-                        config
-                            .encryption
-                            .segment_padding_to_bytes
-                            .checked_sub(plaintext_length)
+                        encryption.padding_to_bytes.checked_sub(plaintext_length)
                     })
                     .ok_or_else(|| Error::SegmentTooLarge {
                         length: plaintext.len() as u64,
-                        max_length: *config.encryption.segment_padding_to_bytes,
+                        max_length: encryption.padding_to_bytes,
                     })?;
                 plaintext.extend(std::iter::repeat(0_u8).take(padding_length as usize));
                 plaintext
             };
             let encryption_key = fragment_key
-                .derive_encryption_key(&config.kdf, encryption_algorithm)
+                .derive_encryption_key(kdf_params, &encryption.algorithm)
                 .await?;
             let encrypted = coset::CoseEncrypt0Builder::new()
                 .protected(
                     HeaderBuilder::new()
                         // Placed in the `protected` fields according to
                         // https://datatracker.ietf.org/doc/html/rfc8152#section-3.1
-                        .algorithm((*encryption_algorithm).into())
+                        .algorithm(encryption.algorithm.into())
                         // .content_type("application/binary".to_string()) // TODO
                         .build(),
                 )
@@ -520,7 +513,7 @@ impl Segment {
                     &plaintext,
                     &[],
                     Encrypt {
-                        algorithm: encryption_algorithm,
+                        algorithm: &encryption.algorithm,
                         key: &encryption_key,
                     },
                 )?
@@ -606,4 +599,11 @@ pub struct SegmentWithContext<'record> {
     // TODO: Zeroize, ZeroizeOnDrop
     pub record: Cow<'record, Segment>,
     pub context: SegmentContext,
+}
+
+#[derive(Debug, Clone, test_strategy::Arbitrary)]
+pub struct SegmentEncryption {
+    pub algorithm: EncryptionAlgorithm,
+    #[strategy(256..=2048_u64)]
+    pub padding_to_bytes: u64,
 }

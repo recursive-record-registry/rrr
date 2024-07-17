@@ -16,7 +16,7 @@ use proptest_arbitrary_interop::arb;
 use proptest_derive::Arbitrary;
 use segment::{
     FragmentFileNameBytes, FragmentKey, FragmentReadSuccess, KdfUsageFragmentParameters,
-    RecordNonce, RecordParameters, RecordVersion, Segment, SegmentMetadata,
+    RecordNonce, RecordParameters, RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -217,7 +217,7 @@ impl Record {
                     let fragment_file_guard = fragment_file.lock_read().await?;
                     let segment = Segment::read_fragment(
                         &registry.config.verifying_keys,
-                        &registry.config,
+                        &registry.config.kdf,
                         fragment_file_guard,
                         &fragment_key,
                     )
@@ -300,7 +300,7 @@ impl Record {
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
         split_at: &[usize], // TODO: Should be generated from the serialized record length.
-        encryption_algorithm: Option<&EncryptionAlgorithm>,
+        encryption: Option<&SegmentEncryption>,
         open_options: &OpenOptions,
     ) -> Result<RecordNonce> {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
@@ -414,10 +414,10 @@ impl Record {
             segment
                 .write_fragment(
                     signing_keys,
-                    &registry.config,
+                    &registry.config.kdf,
                     &mut fragment_file_guard,
                     fragment_key,
-                    encryption_algorithm,
+                    encryption,
                 )
                 .await?;
 

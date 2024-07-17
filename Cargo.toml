@@ -40,6 +40,7 @@ rand = "0.8.5"
 serde = { version = "1.0.203", features = ["derive"] }
 serde_with = "3.8.1"
 sha2 = "0.10.8"
+test-strategy = "0.4.0"
 thiserror = "1.0.61"
 tokio = { version = "1.37", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["io-util"] }
@@ -58,7 +59,6 @@ cddl = "0.9.4"
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 criterion-macro = "0.4.0"
 tempfile = "3.10.1"
-test-strategy = "0.4.0"
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 
 [[bench]]
