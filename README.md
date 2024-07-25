@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/recursive-record-registry/rrr-assets/1b1ca5e008fb990e35de10a1a4ecdd4a5f94e2be/logo/logo_framed_white.svg" width="64px" align="right" />
+
 # Recursive Record Registry (RRR)
 Implementation of the Recursive Record Registry data format in Rust.
 
