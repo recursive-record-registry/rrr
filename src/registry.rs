@@ -7,8 +7,8 @@ use crate::record::segment::{
     FragmentFileNameBytes, RecordNonce, RecordVersion, SegmentEncryption,
 };
 use crate::record::{HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce};
+use crate::utils::fd_lock::{FileLock, ReadLock, WriteLock};
 use crate::utils::serde::{BytesOrHexString, Secret};
-use async_fd_lock::{LockRead, LockWrite};
 use async_scoped::TokioScope;
 use casey::pascal;
 use coset::{cbor::tag, CoseKey};
@@ -480,49 +480,26 @@ impl RegistryConfig {
     }
 }
 
-#[derive(Debug)]
-pub struct WriteLock {
-    config_guard: async_fd_lock::RwLockWriteGuard<File>,
-}
-
-impl WriteLock {
-    async fn new(
-        directory_path: impl AsRef<Path>,
-        open_options: &OpenOptions,
-    ) -> Result<WriteLock> {
-        let config_path =
-            Registry::<WriteLock>::get_config_path_from_registry_directory(directory_path.as_ref());
-        let config_file = open_options.open(config_path).await?;
-        let config_guard = config_file.lock_write().await?;
-        Ok(Self { config_guard })
-    }
-}
-
-#[derive(Debug)]
-pub struct ReadLock {
-    config_guard: async_fd_lock::RwLockReadGuard<File>,
-}
-
-impl ReadLock {
-    async fn new(directory_path: impl AsRef<Path>, open_options: &OpenOptions) -> Result<ReadLock> {
-        let config_path =
-            Registry::<ReadLock>::get_config_path_from_registry_directory(directory_path.as_ref());
-        let config_file = open_options.open(config_path).await?;
-        let config_guard = config_file.lock_read().await?;
-        Ok(Self { config_guard })
-    }
-}
-
 #[derive(Debug, Eq)]
-pub struct Registry<L> {
+pub struct Registry<L: FileLock> {
     pub directory_path: PathBuf,
     pub config: RegistryConfig,
+    /// A file lock on the registry config file.
     file_lock: L,
 }
 
-impl<L: Debug + Sync> Registry<L> {
+impl<L: FileLock> Registry<L> {
     pub const RELATIVE_PATH_CONFIG: &'static str = "registry.cbor";
     pub const RELATIVE_PATH_RECORDS: &'static str = "records";
+
+    async fn lock_from_registry_directory<L2: FileLock>(
+        directory_path: impl AsRef<Path>,
+        open_options: &OpenOptions,
+    ) -> Result<L2> {
+        let config_path = Self::get_config_path_from_registry_directory(directory_path.as_ref());
+
+        L2::lock(config_path, open_options).await
+    }
 
     pub fn get_config_path_from_registry_directory(directory_path: impl AsRef<Path>) -> PathBuf {
         directory_path.as_ref().join(Self::RELATIVE_PATH_CONFIG)
@@ -564,7 +541,7 @@ impl<L: Debug + Sync> Registry<L> {
     }
 }
 
-impl<L> PartialEq for Registry<L> {
+impl<L: FileLock> PartialEq for Registry<L> {
     fn eq(&self, other: &Self) -> bool {
         self.directory_path == other.directory_path && self.config == other.config
     }
@@ -577,8 +554,9 @@ impl Registry<ReadLock> {
             open_options.read(true);
             open_options
         };
-        let mut file_lock = ReadLock::new(&directory_path, &open_options).await?;
-        let config = RegistryConfig::read(&mut file_lock.config_guard).await?;
+        let mut file_lock: ReadLock =
+            Self::lock_from_registry_directory(&directory_path, &open_options).await?;
+        let config = RegistryConfig::read(&mut file_lock.inner_mut()).await?;
 
         Ok(Self {
             directory_path,
@@ -592,14 +570,15 @@ impl Registry<ReadLock> {
             let mut open_options = File::options();
             open_options.read(true);
             open_options.write(true);
-            open_options.append(true);
+            open_options.truncate(true);
             open_options
         };
 
         drop(self.file_lock);
 
         Ok(Registry {
-            file_lock: WriteLock::new(&self.directory_path, &open_options).await?,
+            file_lock: Self::lock_from_registry_directory(&self.directory_path, &open_options)
+                .await?,
             directory_path: self.directory_path,
             config: self.config,
         })
@@ -623,7 +602,7 @@ impl Registry<WriteLock> {
             open_options
         };
         let mut registry = Self {
-            file_lock: WriteLock::new(&directory_path, &open_options).await?,
+            file_lock: Self::lock_from_registry_directory(&directory_path, &open_options).await?,
             directory_path,
             config,
         };
@@ -635,7 +614,7 @@ impl Registry<WriteLock> {
     }
 
     pub async fn save_config(&mut self) -> Result<()> {
-        self.config.write(&mut self.file_lock.config_guard).await?;
+        self.config.write(self.file_lock.inner_mut()).await?;
         Ok(())
     }
 
@@ -684,7 +663,8 @@ impl Registry<WriteLock> {
         drop(self.file_lock);
 
         Ok(Registry {
-            file_lock: ReadLock::new(&self.directory_path, &open_options).await?,
+            file_lock: Self::lock_from_registry_directory(&self.directory_path, &open_options)
+                .await?,
             directory_path: self.directory_path,
             config: self.config,
         })

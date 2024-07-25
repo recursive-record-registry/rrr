@@ -2,7 +2,8 @@ use crate::cbor::{self, DateTimeParseError, TAG_RRR_RECORD};
 use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::signature::SigningKey;
 use crate::error::{Error, Result};
-use crate::registry::{Registry, WriteLock};
+use crate::registry::Registry;
+use crate::utils::fd_lock::{FileLock, WriteLock};
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::{LockRead, LockWrite};
 use chrono::{DateTime, FixedOffset, TimeZone};
@@ -180,12 +181,15 @@ impl Record {
     // }
 
     #[instrument]
-    pub async fn read_version<L: Debug + Sync>(
+    pub async fn read_version<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
         max_collision_resolution_attempts: u64,
-    ) -> Result<Option<RecordReadVersionSuccess>> {
+    ) -> Result<Option<RecordReadVersionSuccess>>
+    where
+        L: FileLock,
+    {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let mut errors = Vec::<Error>::new();
 

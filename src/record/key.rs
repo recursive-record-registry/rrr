@@ -7,6 +7,7 @@ use crate::record::segment::{
     KdfUsageFragmentUsage,
 };
 use crate::registry::{Registry, RegistryConfigHash, RegistryConfigKdf};
+use crate::utils::fd_lock::FileLock;
 use crate::utils::serde::{BytesOrHexString, Secret};
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -167,14 +168,14 @@ impl HashedRecordKey {
 pub trait HashRecordPath {
     async fn hash_record_path<L>(&self, registry: &Registry<L>) -> Result<HashedRecordKey>
     where
-        L: Sync;
+        L: FileLock;
 }
 
 #[async_trait]
 impl HashRecordPath for RecordKey {
     async fn hash_record_path<L>(&self, registry: &Registry<L>) -> Result<HashedRecordKey>
     where
-        L: Sync,
+        L: FileLock,
     {
         self.hash(&registry.config.hash).await
     }
@@ -184,7 +185,7 @@ impl HashRecordPath for RecordKey {
 impl HashRecordPath for HashedRecordKey {
     async fn hash_record_path<L>(&self, _registry: &Registry<L>) -> Result<HashedRecordKey>
     where
-        L: Sync,
+        L: FileLock,
     {
         Ok(self.clone())
     }

@@ -5,6 +5,7 @@ use proptest::prelude::*;
 use rrr::error::Error;
 use rrr::record::segment::{RecordNonce, RecordVersion, SegmentEncryption};
 use rrr::record::{RecordName, SuccessionNonce};
+use rrr::utils::fd_lock::FileLock;
 use rrr::utils::serde::BytesOrHexString;
 use rrr::{
     record::{HashedRecordKey, Record, RecordKey},
@@ -62,7 +63,7 @@ fn arb_record_test_tree(
     })
 }
 
-fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
+fn hash_registry_tree_recursive<'a, L: FileLock + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,
@@ -104,7 +105,7 @@ fn hash_registry_tree_recursive<'a, L: std::fmt::Debug + Sync + 'a>(
     .boxed()
 }
 
-async fn hash_registry_tree<'a, L: std::fmt::Debug + Sync + 'a>(
+async fn hash_registry_tree<'a, L: FileLock + 'a>(
     registry: &'a Registry<L>,
     record_test_node: &'a RecordTestNode,
     predecessor_nonce: Option<&'a SuccessionNonce>,

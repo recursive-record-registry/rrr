@@ -1,6 +1,10 @@
 use std::fmt::Display;
 
-use crate::{error::Result, registry::Registry, utils::serde::BytesOrAscii};
+use crate::{
+    error::Result,
+    registry::Registry,
+    utils::{fd_lock::FileLock, serde::BytesOrAscii},
+};
 use async_trait::async_trait;
 use derive_more::{Deref, DerefMut};
 use futures::TryStreamExt;
@@ -73,7 +77,7 @@ impl Display for RecordPath {
 impl HashRecordPath for RecordPath {
     async fn hash_record_path<L>(&self, registry: &Registry<L>) -> Result<HashedRecordKey>
     where
-        L: Sync,
+        L: FileLock,
     {
         let mut record_names_iter = self.iter();
         let hashed_record_key_root = RecordKey {

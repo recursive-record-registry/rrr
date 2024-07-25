@@ -4,6 +4,7 @@ use crate::{
     cbor::SerializeExt,
     record::{HashedRecordKey, RecordKey, RecordName, RecordPath},
     registry::Registry,
+    utils::fd_lock::FileLock,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use color_eyre::{
@@ -140,7 +141,10 @@ impl RecordNameFormat {
 async fn resolve_path<L>(
     registry: &Registry<L>,
     record_path: &RecordPath,
-) -> color_eyre::Result<HashedRecordKey> {
+) -> color_eyre::Result<HashedRecordKey>
+where
+    L: FileLock,
+{
     let mut record_names_iter = record_path.iter();
     let hashed_record_key_root = RecordKey {
         record_name: record_names_iter

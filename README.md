@@ -60,9 +60,6 @@ Launch it by running the following:
     * [ ] An alternative
     * [ ] Make them optional at compile-time.
 * [ ] Versioning of formats of registries and record fragments.
-* [ ] CDDL verification
-    * [x] Verify all generated CBOR objects
-    * [ ] Use generics to conditionally enable lenient matching for input data
 * [ ] Use `cargo-mutants` to test proper handling and reporting of malformed data
 * [ ] Address the `unwrap` situation.
 * [ ] More granularity in errors.
@@ -72,3 +69,6 @@ Launch it by running the following:
       form #6.55799(#MYTAG(_)), as per https://www.rfc-editor.org/rfc/rfc9277.html#section-2.2.1
       See https://www.rfc-editor.org/rfc/rfc9277.html#name-the-cbor-protocol-specific- for
       registration instructions.
+* [ ] Make it possible to read a record with missing fragments.
+* [ ] Fragment compression
+* [ ] Segment Content-Type header parameter
