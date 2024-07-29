@@ -99,7 +99,7 @@ impl From<String> for GenericError {
     }
 }
 
-pub trait OptionExt<T> {
+pub(crate) trait OptionExt<T> {
     fn unwrap_builder_parameter(
         &self,
         label: &'static str,
@@ -117,5 +117,40 @@ impl<T: Clone> OptionExt<T> for Option<T> {
                 "value is required but was not specified",
             )),
         })
+    }
+}
+
+pub(crate) trait IoResultExt<T, E> {
+    fn map_err_not_found_to_none(self) -> std::result::Result<Option<T>, E>;
+}
+
+impl<T> IoResultExt<T, std::io::Error> for std::io::Result<T> {
+    fn map_err_not_found_to_none(self) -> std::io::Result<Option<T>> {
+        match self {
+            Ok(ok) => Ok(Some(ok)),
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+}
+
+impl<T> IoResultExt<T, Error> for std::result::Result<T, Error> {
+    fn map_err_not_found_to_none(self) -> std::result::Result<Option<T>, Error> {
+        match self {
+            Ok(ok) => Ok(Some(ok)),
+            Err(Error::Io(io_err)) => {
+                if io_err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(Error::Io(io_err))
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 }

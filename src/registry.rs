@@ -6,7 +6,9 @@ use crate::error::{Error, InvalidParameterError, OptionExt, Result};
 use crate::record::segment::{
     FragmentFileNameBytes, RecordNonce, RecordVersion, SegmentEncryption,
 };
-use crate::record::{HashRecordPath, Record, RecordReadVersionSuccess, SuccessionNonce};
+use crate::record::{
+    HashRecordPath, Record, RecordListVersionsItem, RecordReadVersionSuccess, SuccessionNonce,
+};
 use crate::utils::fd_lock::{FileLock, ReadLock, WriteLock};
 use crate::utils::serde::{BytesOrHexString, Secret};
 use async_scoped::TokioScope;
@@ -535,6 +537,21 @@ impl<L: FileLock> Registry<L> {
             self,
             hash_record_path,
             record_version,
+            max_collision_resolution_attempts,
+        )
+        .await
+    }
+
+    pub async fn list_record_versions(
+        &self,
+        hash_record_path: &(impl HashRecordPath + Debug),
+        max_version_lookahead: u64,
+        max_collision_resolution_attempts: u64,
+    ) -> Result<Vec<RecordListVersionsItem>> {
+        Record::list_versions(
+            self,
+            hash_record_path,
+            max_version_lookahead,
             max_collision_resolution_attempts,
         )
         .await
