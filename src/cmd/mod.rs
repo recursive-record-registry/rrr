@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
     cbor::SerializeExt,
-    record::{HashedRecordKey, RecordKey, RecordName, RecordPath},
+    record::{
+        segment::RecordVersion, HashRecordPath, HashedRecordKey, RecordKey, RecordName, RecordPath,
+    },
     registry::Registry,
     utils::fd_lock::FileLock,
 };
@@ -11,6 +13,7 @@ use color_eyre::{
     eyre::{bail, eyre},
     Result,
 };
+use derive_more::Deref;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use tokio::io::AsyncWriteExt;
@@ -50,27 +53,72 @@ pub enum RrrSubcommandRecord {
     ListVersions {
         #[command(flatten)]
         record_path_args: RrrArgsRecordPath,
+        #[command(flatten)]
+        max_version_lookahead_args: RrrArgsRecordMaxVersionLookahead,
     },
     /// Read the metadata of the record.
     Info {
-        // TODO: Option for the latest version, default.
-        /// The version of the record to open.
-        /// See [`ListVersions`].
-        #[arg(short('v'), long)]
-        record_version: u64,
+        #[command(flatten)]
+        record_version_args: RrrArgsRecordVersion,
         #[command(flatten)]
         record_path_args: RrrArgsRecordPath,
     },
     /// Read the specified record version from the registry.
     Read {
-        // TODO: Option for the latest version, default.
-        /// The version of the record to open.
-        /// See [`ListVersions`].
-        #[arg(short('v'), long)]
-        record_version: u64,
+        #[command(flatten)]
+        record_version_args: RrrArgsRecordVersion,
         #[command(flatten)]
         record_path_args: RrrArgsRecordPath,
     },
+}
+
+#[derive(Args, Debug, Clone, Deref)]
+pub struct RrrArgsRecordMaxVersionLookahead {
+    /// How many versions ahead of a missing version following the latest known version should be
+    /// searched, in an attempt to find an even newer version.
+    ///
+    /// For example, when this is set to '1', and the record versions 0, 1, 3, 5, 8 are stored in
+    /// the registry, the version 5 would be considered the latest (the search begins at record
+    /// version 0).
+    #[arg(short('l'), long, default_value = "10")]
+    #[deref]
+    max_version_lookahead: u64,
+}
+
+#[derive(Args, Debug, Clone)]
+// #[group(required = true, multiple = false)]
+pub struct RrrArgsRecordVersion {
+    #[command(flatten)]
+    max_version_lookahead: RrrArgsRecordMaxVersionLookahead,
+    /// The version of the record to open.
+    /// See the 'list-versions' subcommand, to list available versions for reading.
+    /// When no value is specified, the latest version is searched using the
+    /// '--max-version-lookahead' argument.
+    #[arg(short('v'), long, conflicts_with = "max_version_lookahead")]
+    record_version: Option<u64>,
+}
+
+impl RrrArgsRecordVersion {
+    async fn get_version<L: FileLock>(
+        &self,
+        registry: &Registry<L>,
+        hash_record_path: &(impl HashRecordPath + Debug),
+        max_collision_resolution_attempts: u64,
+    ) -> Result<Option<RecordVersion>> {
+        if let Some(record_version) = self.record_version.as_ref().copied() {
+            Ok(Some(RecordVersion(record_version)))
+        } else {
+            let versions = registry
+                .list_record_versions(
+                    hash_record_path,
+                    *self.max_version_lookahead,
+                    max_collision_resolution_attempts,
+                )
+                .await?;
+
+            Ok(versions.last().map(|version| version.record_version))
+        }
+    }
 }
 
 #[derive(Args, Debug, Clone)]
@@ -190,24 +238,64 @@ impl RrrArgs {
                 }
             },
             RrrCommandKind::Record { subcommand } => match subcommand {
-                RrrSubcommandRecord::ListVersions { record_path_args } => {
+                RrrSubcommandRecord::ListVersions {
+                    record_path_args,
+                    max_version_lookahead_args,
+                } => {
                     let registry = Registry::open(self.registry_directory).await?;
-                    let record_names = record_path_args.parse_record_path().await?;
-                    let hashed_record_key = resolve_path(&registry, &record_names).await?;
+                    let record_path = record_path_args.parse_record_path().await?;
+                    let hashed_record_key = resolve_path(&registry, &record_path).await?;
+                    let versions = registry
+                        .list_record_versions(
+                            &hashed_record_key,
+                            *max_version_lookahead_args,
+                            record_path_args.max_collision_resolution_attempts,
+                        )
+                        .await?;
 
-                    bail!("Not yet implemented");
+                    if versions.is_empty() {
+                        bail!("record not found: {record_path}");
+                    }
+
+                    println!("# Versions of record {record_path}:");
+
+                    for version in &versions {
+                        println!("- version {}:", *version.record_version);
+                        println!("  - nonce: {}", *version.record_nonce);
+                        println!("  - segments:");
+
+                        for segment in &version.segments {
+                            println!("    - {}", segment.fragment_file_name);
+                            println!("      - content bytes: {}", segment.segment_bytes);
+                            println!(
+                                "      - enc. alg.:     {}",
+                                segment
+                                    .fragment_encryption_algorithm
+                                    .map(|alg| alg.to_string())
+                                    .unwrap_or_else(|| "none".to_string())
+                            );
+                        }
+                    }
                 }
                 RrrSubcommandRecord::Info {
-                    record_version,
+                    record_version_args,
                     record_path_args,
                 } => {
                     let registry = Registry::open(self.registry_directory).await?;
                     let record_path = record_path_args.parse_record_path().await?;
                     let hashed_record_key = resolve_path(&registry, &record_path).await?;
+                    let record_version = record_version_args
+                        .get_version(
+                            &registry,
+                            &hashed_record_key,
+                            record_path_args.max_collision_resolution_attempts,
+                        )
+                        .await?
+                        .ok_or_else(|| eyre!("record not found: {record_path}"))?;
                     let record = registry
                         .load_record(
                             &hashed_record_key,
-                            record_version.into(),
+                            record_version,
                             record_path_args.max_collision_resolution_attempts,
                         )
                         .await?
@@ -216,7 +304,7 @@ impl RrrArgs {
                     println!("# Record parameters");
                     println!("- path:          {}", record_path.iter().format(" "));
                     println!("- name:          {}", record_path.last());
-                    println!("- version:       {}", record_version);
+                    println!("- version:       {}", *record_version);
                     println!("- nonce:         {}", *record.record_nonce);
                     println!("- content bytes: {}", record.data.len());
                     println!(
@@ -251,16 +339,24 @@ impl RrrArgs {
                     }
                 }
                 RrrSubcommandRecord::Read {
-                    record_version,
+                    record_version_args,
                     record_path_args,
                 } => {
                     let registry = Registry::open(self.registry_directory).await?;
                     let record_path = record_path_args.parse_record_path().await?;
                     let hashed_record_key = resolve_path(&registry, &record_path).await?;
+                    let record_version = record_version_args
+                        .get_version(
+                            &registry,
+                            &hashed_record_key,
+                            record_path_args.max_collision_resolution_attempts,
+                        )
+                        .await?
+                        .ok_or_else(|| eyre!("record not found: {record_path}"))?;
                     let record = registry
                         .load_record(
                             &hashed_record_key,
-                            record_version.into(),
+                            record_version,
                             record_path_args.max_collision_resolution_attempts,
                         )
                         .await?
