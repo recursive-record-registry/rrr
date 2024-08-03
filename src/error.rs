@@ -53,6 +53,8 @@ pub enum Error {
     FileTagMismatch,
     #[error("Segment too large ({length} bytes) to store in a block of {max_length} bytes")]
     SegmentTooLarge { length: u64, max_length: u64 },
+    #[error("Incomplete record, missing segment #{missing_segment_index}")]
+    IncompleteRecord { missing_segment_index: u64 },
 }
 
 impl<T> From<LockError<T>> for Error {

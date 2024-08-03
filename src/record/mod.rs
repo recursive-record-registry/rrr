@@ -9,6 +9,7 @@ use async_fd_lock::{LockRead, LockWrite};
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
 use derive_more::{Deref, DerefMut};
+use futures::{pin_mut, Stream, StreamExt};
 use itertools::Itertools;
 use proptest::arbitrary::Arbitrary;
 use proptest::prop_compose;
@@ -179,7 +180,111 @@ pub struct RecordListVersionsItem {
     pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deref, DerefMut)]
+pub struct RecordReadSegment {
+    #[deref]
+    #[deref_mut]
+    pub segment: Segment,
+    pub fragment_file_name: FragmentFileNameBytes,
+    pub fragment_encryption_algorithm: Option<EncryptionAlgorithm>,
+}
+
 impl Record {
+    #[instrument]
+    pub async fn read_segments<'a, L>(
+        registry: &'a Registry<L>,
+        hash_record_path: &'a (impl HashRecordPath + Debug),
+        record_version: RecordVersion,
+        record_nonce: RecordNonce,
+    ) -> Result<impl Stream<Item = Result<Option<RecordReadSegment>>> + 'a>
+    where
+        L: FileLock,
+    {
+        let hashed_key = hash_record_path.hash_record_path(registry).await?;
+        let record_parameters = RecordParameters {
+            version: record_version,
+            nonce: record_nonce,
+        };
+
+        #[derive(Default)]
+        struct StreamState {
+            segment_index: u64,
+            closed: bool,
+        }
+
+        let stream_state = StreamState::default();
+        let stream =
+            futures::stream::try_unfold(stream_state, move |mut stream_state: StreamState| {
+                let hashed_key = hashed_key.clone();
+                let record_parameters = record_parameters.clone();
+
+                async move {
+                    if stream_state.closed {
+                        return Ok(None);
+                    }
+
+                    let fragment_key = FragmentKey {
+                        hashed_record_key: hashed_key,
+                        fragment_parameters: KdfUsageFragmentParameters {
+                            record_parameters,
+                            segment_index: stream_state.segment_index.into(),
+                        },
+                    };
+                    let fragment_file_name =
+                        fragment_key.derive_file_name(&registry.config.kdf).await?;
+                    let fragment_file_tag =
+                        fragment_key.derive_file_tag(&registry.config.kdf).await?;
+                    let fragment_path = registry.get_fragment_path(&fragment_file_name);
+                    let segment_result: Result<FragmentReadSuccess> = try {
+                        let fragment_file = File::open(&fragment_path).await?;
+                        let fragment_file_guard = fragment_file.lock_read().await?;
+                        let segment = Segment::read_fragment(
+                            &registry.config.verifying_keys,
+                            &registry.config.kdf,
+                            fragment_file_guard,
+                            &fragment_key,
+                        )
+                        .await?;
+                        let found_file_tag = segment.metadata.get_file_tag()?;
+
+                        if found_file_tag != fragment_file_tag {
+                            Err(Error::FileTagMismatch)?;
+                        }
+
+                        segment
+                    };
+
+                    trace!(
+                        ?fragment_key,
+                        ?fragment_file_name,
+                        ?fragment_path,
+                        error = ?segment_result.as_ref().err(),
+                        "Attempted to load a record fragment"
+                    );
+
+                    stream_state.segment_index += 1;
+                    let fragment_read_success = match segment_result.map_err_not_found_to_none() {
+                        Ok(Some(segment)) => segment,
+                        Ok(None) => return Ok(Some((None, stream_state))),
+                        Err(err) => return Err(err),
+                    };
+                    let result = RecordReadSegment {
+                        segment: fragment_read_success.segment,
+                        fragment_file_name,
+                        fragment_encryption_algorithm: fragment_read_success.encryption_algorithm,
+                    };
+
+                    if result.segment.metadata.get_last()? {
+                        stream_state.closed = true;
+                    }
+
+                    Ok(Some((Some(result), stream_state)))
+                }
+            });
+
+        Ok(stream)
+    }
+
     /// Attempts to read a record with the specified record version and record nonce.
     #[instrument]
     pub async fn read_version_with_nonce<L>(
@@ -191,70 +296,26 @@ impl Record {
     where
         L: FileLock,
     {
-        let hashed_key = hash_record_path.hash_record_path(registry).await?;
-
-        let record_parameters = RecordParameters {
-            version: record_version,
-            nonce: record_nonce,
-        };
-        let mut segments = Vec::new();
         let mut data_buffer = Vec::<u8>::new();
+        let mut segments = Vec::<RecordReadVersionSuccessSegment>::new();
+        let stream =
+            Self::read_segments(registry, hash_record_path, record_version, record_nonce).await?;
 
-        'segment_loop: loop {
-            let fragment_key = FragmentKey {
-                hashed_record_key: hashed_key.clone(),
-                fragment_parameters: KdfUsageFragmentParameters {
-                    record_parameters: record_parameters.clone(),
-                    segment_index: (segments.len() as u64).into(),
-                },
-            };
-            let fragment_file_name = fragment_key.derive_file_name(&registry.config.kdf).await?;
-            let fragment_file_tag = fragment_key.derive_file_tag(&registry.config.kdf).await?;
-            let fragment_path = registry.get_fragment_path(&fragment_file_name);
+        pin_mut!(stream);
 
-            let segment_result: Result<FragmentReadSuccess> = try {
-                let fragment_file = File::open(&fragment_path).await?;
-                let fragment_file_guard = fragment_file.lock_read().await?;
-                let segment = Segment::read_fragment(
-                    &registry.config.verifying_keys,
-                    &registry.config.kdf,
-                    fragment_file_guard,
-                    &fragment_key,
-                )
-                .await?;
-                let found_file_tag = segment.metadata.get_file_tag()?;
-
-                if found_file_tag != fragment_file_tag {
-                    Err(Error::FileTagMismatch)?;
-                }
-
-                segment
-            };
-
-            trace!(
-                ?fragment_key,
-                ?fragment_file_name,
-                ?fragment_path,
-                error = ?segment_result.as_ref().err(),
-                "Attempted to load a record fragment"
-            );
-
-            let segment = match segment_result.map_err_not_found_to_none() {
-                Ok(Some(segment)) => segment,
-                Ok(None) => return Ok(None),
-                Err(err) => return Err(err),
-            };
-
-            data_buffer.extend_from_slice(&segment.data);
-
-            segments.push(RecordReadVersionSuccessSegment {
-                segment_bytes: segment.data.len(),
-                fragment_file_name,
-                fragment_encryption_algorithm: segment.encryption_algorithm,
-            });
-
-            if segment.metadata.get_last()? {
-                break 'segment_loop;
+        while let Some(item) = stream.next().await {
+            if let Some(segment) = item? {
+                data_buffer.extend_from_slice(&segment.data);
+                segments.push(RecordReadVersionSuccessSegment {
+                    segment_bytes: segment.data.len(),
+                    fragment_encryption_algorithm: segment.fragment_encryption_algorithm,
+                    fragment_file_name: segment.fragment_file_name,
+                })
+            } else {
+                // TODO: Better support for reading incomplete records.
+                return Err(Error::IncompleteRecord {
+                    missing_segment_index: segments.len() as u64,
+                });
             }
         }
 
