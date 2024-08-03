@@ -5,8 +5,10 @@ use crate::crypto::encryption::{Decrypt, Encrypt, EncryptionAlgorithm};
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
-use crate::registry::RegistryConfigKdf;
+use crate::registry::{Registry, RegistryConfigKdf};
+use crate::utils::fd_lock::FileLock;
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
+use async_fd_lock::LockRead;
 use async_scoped::TokioScope;
 use coset::cbor::tag;
 use coset::TaggedCborSerializable;
@@ -25,9 +27,10 @@ use std::fmt::Display;
 use std::io::Cursor;
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug};
+use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite};
 use tokio_util::io::SyncIoBridge;
-use tracing::warn;
+use tracing::{instrument, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // /// A UTF-8 string with no `'/'` characters.
@@ -353,12 +356,13 @@ impl<'a> From<&'a Segment> for SegmentSerde<'a> {
 }
 
 impl Segment {
-    pub async fn read_fragment(
+    #[instrument]
+    pub async fn read_fragment_from_stream(
         verifying_keys: &[VerifyingKey],
         kdf_params: &RegistryConfigKdf,
-        mut read: impl AsyncRead + Unpin + Send,
+        mut read: impl AsyncRead + Unpin + Send + Debug,
         fragment_key: &FragmentKey,
-    ) -> Result<FragmentReadSuccess> {
+    ) -> Result<FragmentReadFromStreamSuccess> {
         let input_value = {
             let mut input_bytes = Vec::new();
             read.read_to_end(&mut input_bytes).await?;
@@ -465,17 +469,55 @@ impl Segment {
 
         let segment = input_value.deserialized::<Self>().map_err(Error::Cbor)?;
 
-        Ok(FragmentReadSuccess {
+        // Check file tag.
+        {
+            let fragment_file_tag = fragment_key.derive_file_tag(kdf_params).await?;
+            let found_file_tag = segment.metadata.get_file_tag()?;
+
+            if found_file_tag != fragment_file_tag {
+                Err(Error::FileTagMismatch)?;
+            }
+        }
+
+        Ok(FragmentReadFromStreamSuccess {
             segment,
             encryption_algorithm,
         })
     }
 
+    #[instrument]
+    pub async fn read_fragment<L>(
+        registry: &Registry<L>,
+        fragment_key: &FragmentKey,
+    ) -> Result<FragmentReadSuccess>
+    where
+        L: FileLock,
+    {
+        let fragment_file_name = fragment_key.derive_file_name(&registry.config.kdf).await?;
+        let fragment_path = registry.get_fragment_path(&fragment_file_name);
+        let fragment_file = File::open(&fragment_path).await?;
+        let fragment_file_guard = fragment_file.lock_read().await?;
+        let segment = Self::read_fragment_from_stream(
+            &registry.config.verifying_keys,
+            &registry.config.kdf,
+            fragment_file_guard,
+            fragment_key,
+        )
+        .await?;
+
+        Ok(FragmentReadSuccess {
+            segment: segment.segment,
+            encryption_algorithm: segment.encryption_algorithm,
+            fragment_file_name,
+        })
+    }
+
+    #[instrument]
     pub async fn write_fragment(
         &self,
         signing_keys: &[SigningKey],
         kdf_params: &RegistryConfigKdf,
-        write: impl AsyncWrite + AsyncSeek + Unpin + Send,
+        write: impl AsyncWrite + AsyncSeek + Unpin + Send + Debug,
         fragment_key: &FragmentKey,
         encryption_algorithm: Option<&SegmentEncryption>,
     ) -> Result<()> {
@@ -580,11 +622,20 @@ impl Segment {
 }
 
 #[derive(Debug, Clone, Deref, DerefMut, PartialEq)]
+pub struct FragmentReadFromStreamSuccess {
+    #[deref]
+    #[deref_mut]
+    pub segment: Segment,
+    pub encryption_algorithm: Option<EncryptionAlgorithm>,
+}
+
+#[derive(Debug, Clone, Deref, DerefMut, PartialEq)]
 pub struct FragmentReadSuccess {
     #[deref]
     #[deref_mut]
     pub segment: Segment,
     pub encryption_algorithm: Option<EncryptionAlgorithm>,
+    pub fragment_file_name: FragmentFileNameBytes,
 }
 
 /// Data known when opening a record.

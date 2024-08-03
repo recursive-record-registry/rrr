@@ -5,7 +5,7 @@ use crate::error::{Error, IoResultExt, Result};
 use crate::registry::Registry;
 use crate::utils::fd_lock::{FileLock, WriteLock};
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
-use async_fd_lock::{LockRead, LockWrite};
+use async_fd_lock::LockWrite;
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
 use derive_more::{Deref, DerefMut};
@@ -17,14 +17,14 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_arbitrary_interop::arb;
 use proptest_derive::Arbitrary;
 use segment::{
-    FragmentFileNameBytes, FragmentKey, FragmentReadSuccess, KdfUsageFragmentParameters,
-    RecordNonce, RecordParameters, RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
+    FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters, RecordNonce, RecordParameters,
+    RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
 use std::iter;
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug, io::Cursor};
-use tokio::fs::{File, OpenOptions};
+use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{debug, info, instrument, trace};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -180,6 +180,7 @@ pub struct RecordListVersionsItem {
     pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
+// TODO: Consider replacing this or making it an alias of `FragmentReadSuccess`.
 #[derive(Debug, Clone, PartialEq, Deref, DerefMut)]
 pub struct RecordReadSegment {
     #[deref]
@@ -230,38 +231,7 @@ impl Record {
                             segment_index: stream_state.segment_index.into(),
                         },
                     };
-                    let fragment_file_name =
-                        fragment_key.derive_file_name(&registry.config.kdf).await?;
-                    let fragment_file_tag =
-                        fragment_key.derive_file_tag(&registry.config.kdf).await?;
-                    let fragment_path = registry.get_fragment_path(&fragment_file_name);
-                    let segment_result: Result<FragmentReadSuccess> = try {
-                        let fragment_file = File::open(&fragment_path).await?;
-                        let fragment_file_guard = fragment_file.lock_read().await?;
-                        let segment = Segment::read_fragment(
-                            &registry.config.verifying_keys,
-                            &registry.config.kdf,
-                            fragment_file_guard,
-                            &fragment_key,
-                        )
-                        .await?;
-                        let found_file_tag = segment.metadata.get_file_tag()?;
-
-                        if found_file_tag != fragment_file_tag {
-                            Err(Error::FileTagMismatch)?;
-                        }
-
-                        segment
-                    };
-
-                    trace!(
-                        ?fragment_key,
-                        ?fragment_file_name,
-                        ?fragment_path,
-                        error = ?segment_result.as_ref().err(),
-                        "Attempted to load a record fragment"
-                    );
-
+                    let segment_result = Segment::read_fragment(registry, &fragment_key).await;
                     stream_state.segment_index += 1;
                     let fragment_read_success = match segment_result.map_err_not_found_to_none() {
                         Ok(Some(segment)) => segment,
@@ -270,7 +240,7 @@ impl Record {
                     };
                     let result = RecordReadSegment {
                         segment: fragment_read_success.segment,
-                        fragment_file_name,
+                        fragment_file_name: fragment_read_success.fragment_file_name,
                         fragment_encryption_algorithm: fragment_read_success.encryption_algorithm,
                     };
 
