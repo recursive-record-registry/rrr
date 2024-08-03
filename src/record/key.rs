@@ -120,7 +120,7 @@ impl HashedRecordKey {
         let mut okm =
             vec![0_u8; kdf_params.get_file_name_length_in_bytes() as usize].into_boxed_slice();
         let usage = KdfUsage::Fragment {
-            usage: KdfUsageFragmentUsage::FileName,
+            usage: KdfUsageFragmentUsage::FileName {},
             parameters: fragment_parameters.clone(),
         };
 
@@ -137,7 +137,7 @@ impl HashedRecordKey {
         let mut okm =
             vec![0_u8; kdf_params.get_file_tag_length_in_bytes() as usize].into_boxed_slice();
         let usage = KdfUsage::Fragment {
-            usage: KdfUsageFragmentUsage::FileTag,
+            usage: KdfUsageFragmentUsage::FileTag {},
             parameters: fragment_parameters.clone(),
         };
 
@@ -154,7 +154,7 @@ impl HashedRecordKey {
     ) -> Result<FragmentEncryptionKeyBytes> {
         let mut okm = vec![0_u8; encryption_alg.key_length_in_bytes()].into_boxed_slice();
         let usage = KdfUsage::Fragment {
-            usage: KdfUsageFragmentUsage::EncryptionKey,
+            usage: KdfUsageFragmentUsage::EncryptionKey {},
             parameters: fragment_parameters.clone(),
         };
 

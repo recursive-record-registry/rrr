@@ -104,6 +104,7 @@ impl FragmentKey {
 #[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsage {
+    Custom(BytesOrHexString<Vec<u8>>),
     SuccessionNonce {},
     Fragment {
         usage: KdfUsageFragmentUsage,
@@ -114,9 +115,10 @@ pub enum KdfUsage {
 #[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsageFragmentUsage {
-    EncryptionKey,
-    FileName,
-    FileTag,
+    Custom(BytesOrHexString<Vec<u8>>),
+    EncryptionKey {},
+    FileName {},
+    FileTag {},
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
