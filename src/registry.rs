@@ -289,10 +289,7 @@ impl RegistryConfigKdfBuilder {
         self
     }
 
-    pub fn build_with_random_root_predecessor_nonce(
-        &self,
-        mut csprng: impl RngCore + CryptoRng,
-    ) -> Result<RegistryConfigKdf> {
+    pub fn build(&self, root_predecessor_nonce: SuccessionNonce) -> Result<RegistryConfigKdf> {
         let algorithm = self.algorithm.unwrap_builder_parameter("algorithm")?;
         let file_name_length_in_bytes = ConfigParam::try_from(self.file_name_length_in_bytes)
             .map_err(InvalidParameterError::from)?;
@@ -302,17 +299,22 @@ impl RegistryConfigKdfBuilder {
             ConfigParam::try_from(self.succession_nonce_length_in_bytes)
                 .map_err(InvalidParameterError::from)?;
         Ok(RegistryConfigKdf {
-            root_predecessor_nonce: {
-                let mut bytes =
-                    vec![0_u8; *succession_nonce_length_in_bytes as usize].into_boxed_slice();
-                csprng.fill_bytes(&mut bytes);
-                SuccessionNonce(Secret(BytesOrHexString(bytes)))
-            },
+            root_predecessor_nonce,
             algorithm,
             file_name_length_in_bytes,
             file_tag_length_in_bytes,
             succession_nonce_length_in_bytes,
         })
+    }
+
+    pub fn build_with_random_root_predecessor_nonce(
+        &self,
+        csprng: impl RngCore + CryptoRng,
+    ) -> Result<RegistryConfigKdf> {
+        self.build(RegistryConfigKdf::generate_random_root_predecessor_nonce(
+            csprng,
+            Some(self.succession_nonce_length_in_bytes),
+        ))
     }
 }
 
@@ -328,6 +330,17 @@ pub struct RegistryConfigKdf {
 impl RegistryConfigKdf {
     pub fn builder() -> RegistryConfigKdfBuilder {
         Default::default()
+    }
+
+    pub fn generate_random_root_predecessor_nonce(
+        mut csprng: impl RngCore + CryptoRng,
+        succession_nonce_length_in_bytes: Option<u64>,
+    ) -> SuccessionNonce {
+        let succession_nonce_length_in_bytes =
+            succession_nonce_length_in_bytes.unwrap_or(SuccessionNonceLengthInBytes::RECOMMENDED);
+        let mut bytes = vec![0_u8; succession_nonce_length_in_bytes as usize].into_boxed_slice();
+        csprng.fill_bytes(&mut bytes);
+        SuccessionNonce(Secret(BytesOrHexString(bytes)))
     }
 
     pub fn get_algorithm(&self) -> &KdfAlgorithm {
