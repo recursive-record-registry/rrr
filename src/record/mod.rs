@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug, io::Cursor};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, Level};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub mod segment;
@@ -173,6 +173,7 @@ pub struct RecordReadVersionSuccess {
     pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct RecordListVersionsItem {
     pub record_metadata: RecordMetadata,
     pub record_version: RecordVersion,
@@ -191,7 +192,7 @@ pub struct RecordReadSegment {
 }
 
 impl Record {
-    #[instrument]
+    #[instrument(level = Level::TRACE, err)]
     pub async fn read_segments<'a, L>(
         registry: &'a Registry<L>,
         hash_record_path: &'a (impl HashRecordPath + Debug),
@@ -252,11 +253,13 @@ impl Record {
                 }
             });
 
+        trace!("a stream of segments opened");
+
         Ok(stream)
     }
 
     /// Attempts to read a record with the specified record version and record nonce.
-    #[instrument]
+    #[instrument(level = Level::TRACE, ret, err)]
     pub async fn read_version_with_nonce<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
@@ -283,9 +286,13 @@ impl Record {
                 })
             } else {
                 // TODO: Better support for reading incomplete records.
-                return Err(Error::IncompleteRecord {
-                    missing_segment_index: segments.len() as u64,
-                });
+                if segments.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Err(Error::IncompleteRecord {
+                        missing_segment_index: segments.len() as u64,
+                    });
+                }
             }
         }
 
@@ -301,7 +308,7 @@ impl Record {
         }))
     }
 
-    #[instrument]
+    #[instrument(level = Level::TRACE, ret, err)]
     pub async fn read_version<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
@@ -336,7 +343,7 @@ impl Record {
         }
     }
 
-    #[instrument]
+    #[instrument(level = Level::TRACE, ret, err)]
     pub async fn list_versions<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
@@ -385,7 +392,7 @@ impl Record {
         Ok(versions)
     }
 
-    #[instrument]
+    #[instrument(level = Level::TRACE, ret, err)]
     pub async fn write_version(
         &self,
         signing_keys: &[SigningKey],
