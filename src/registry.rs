@@ -35,7 +35,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
 };
 use tokio_util::io::SyncIoBridge;
-use tracing::warn;
+use tracing::{info, instrument, warn};
 
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
@@ -578,6 +578,7 @@ impl<L: FileLock> PartialEq for Registry<L> {
 }
 
 impl Registry<ReadLock> {
+    #[instrument]
     pub async fn open(directory_path: PathBuf) -> Result<Self> {
         let open_options = {
             let mut open_options = File::options();
@@ -595,6 +596,7 @@ impl Registry<ReadLock> {
         })
     }
 
+    #[instrument]
     pub async fn lock_write(self) -> Result<Registry<WriteLock>> {
         let open_options = {
             let mut open_options = File::options();
@@ -616,6 +618,7 @@ impl Registry<ReadLock> {
 }
 
 impl Registry<WriteLock> {
+    #[instrument]
     pub async fn create(
         directory_path: PathBuf,
         config: RegistryConfig,
@@ -683,6 +686,7 @@ impl Registry<WriteLock> {
             .await
     }
 
+    #[instrument]
     pub async fn lock_read(self) -> Result<Registry<ReadLock>> {
         let open_options = {
             let mut open_options = File::options();

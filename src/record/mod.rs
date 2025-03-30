@@ -1,4 +1,4 @@
-use crate::cbor::{self, DateTimeParseError, TAG_RRR_RECORD};
+use crate::cbor::{self, TAG_RRR_RECORD};
 use crate::crypto::encryption::EncryptionAlgorithm;
 use crate::crypto::signature::SigningKey;
 use crate::error::{Error, IoResultExt, Result};
@@ -8,6 +8,7 @@ use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::LockWrite;
 use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
+use coset::cbor::value::Integer;
 use derive_more::{Deref, DerefMut};
 use futures::{pin_mut, Stream, StreamExt};
 use itertools::Itertools;
@@ -21,6 +22,7 @@ use segment::{
     RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::iter;
 use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug, io::Cursor};
@@ -54,28 +56,78 @@ impl DerefMut for SuccessionNonce {
     }
 }
 
+#[repr(u64)]
+pub enum RecordMetadataId {
+    CreatedAt = 1,
+}
+
+impl Display for RecordMetadataId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CreatedAt => write!(f, "Created At"),
+        }
+    }
+}
+
+impl TryFrom<&Integer> for RecordMetadataId {
+    type Error = ();
+
+    fn try_from(value: &Integer) -> std::result::Result<Self, ()> {
+        // Consider using the `num_enum` crate if this becomes cumbersome.
+        let value: u64 = value.clone().try_into().map_err(|_| ())?;
+        Ok(match value {
+            _ if value == Self::CreatedAt as u64 => Self::CreatedAt,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl TryFrom<&cbor::Value> for RecordMetadataId {
+    type Error = ();
+
+    fn try_from(value: &cbor::Value) -> std::result::Result<Self, ()> {
+        let integer = value.as_integer().ok_or(())?;
+
+        Self::try_from(&integer)
+    }
+}
+
+pub enum RecordMetadataKey<'a> {
+    Id(RecordMetadataId),
+    Custom(cbor::HashableCborValueRef<'a>),
+}
+
 /// A CBOR map of metadata.
 #[derive(Clone, Debug, Default, Deref, DerefMut, PartialEq, Serialize, Deserialize)]
 pub struct RecordMetadata(pub cbor::Map);
 
 impl RecordMetadata {
-    pub const KEY_CREATED_AT: u64 = 1;
-
-    pub fn get_created_at(
-        &self,
-    ) -> std::result::Result<Option<DateTime<FixedOffset>>, DateTimeParseError> {
-        self.get_date_time(Self::KEY_CREATED_AT)
+    pub fn get_created_at(&self) -> Option<DateTime<FixedOffset>> {
+        self.get_date_time(RecordMetadataId::CreatedAt as u64)
     }
 
     pub fn insert_created_at<Tz: TimeZone>(
         &mut self,
         date_time: DateTime<Tz>,
     ) -> Option<cbor::Value> {
-        self.insert_date_time(Self::KEY_CREATED_AT, date_time)
+        self.insert_date_time(RecordMetadataId::CreatedAt as u64, date_time)
     }
 
     pub fn shift_remove_created_at(&mut self) -> Option<cbor::Value> {
-        self.shift_remove(Self::KEY_CREATED_AT)
+        self.shift_remove(RecordMetadataId::CreatedAt as u64)
+    }
+
+    pub fn iter_with_semantic_keys<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (RecordMetadataKey<'a>, &'a cbor::Value)> {
+        self.iter()
+            .map(|(key, value)| match RecordMetadataId::try_from(&key.0) {
+                Ok(id) => (RecordMetadataKey::Id(id), value),
+                Err(()) => (
+                    RecordMetadataKey::Custom(cbor::HashableCborValueRef(&key.0)),
+                    value,
+                ),
+            })
     }
 }
 
@@ -343,6 +395,7 @@ impl Record {
         }
     }
 
+    /// Returns the available record versions, sorted from least to most recent.
     #[instrument(level = Level::TRACE, ret, err)]
     pub async fn list_versions<L>(
         registry: &Registry<L>,

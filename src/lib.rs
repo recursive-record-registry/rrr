@@ -1,5 +1,4 @@
 #![feature(array_windows)]
-#![feature(async_closure)]
 #![feature(deref_patterns)]
 #![feature(fn_traits)]
 #![feature(try_blocks)]

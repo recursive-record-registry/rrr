@@ -71,14 +71,6 @@ impl Equivalent<HashableCborValue> for HashableCborValueRef<'_> {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum DateTimeParseError {
-    #[error("Invalid CBOR type")]
-    InvalidCborType,
-    #[error("Invalid format: {0}")]
-    Format(#[from] chrono::ParseError),
-}
-
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Map(IndexMap<HashableCborValue, Value>);
 
@@ -103,25 +95,8 @@ impl Map {
         self.0.shift_remove(&HashableCborValueRef(key))
     }
 
-    pub fn get_date_time(
-        &self,
-        key: impl Into<Value>,
-    ) -> std::result::Result<Option<DateTime<FixedOffset>>, DateTimeParseError> {
-        let Some(value) = self.get(key) else {
-            return Ok(None);
-        };
-        let string = match value {
-            Value::Tag(tag, deref!(Value::Text(string)))
-                if *tag == iana::CborTag::DateTime as u64 =>
-            {
-                string
-            }
-            Value::Text(string) => string,
-            _ => return Err(DateTimeParseError::InvalidCborType),
-        };
-        let date_time = DateTime::parse_from_rfc3339(string)?;
-
-        Ok(Some(date_time))
+    pub fn get_date_time(&self, key: impl Into<Value>) -> Option<DateTime<FixedOffset>> {
+        self.get(key)?.as_datetime()
     }
 
     pub fn insert_date_time<Tz: TimeZone>(
@@ -129,12 +104,7 @@ impl Map {
         key: impl Into<Value>,
         date_time: DateTime<Tz>,
     ) -> Option<Value> {
-        let string = date_time.to_rfc3339();
-        let value = Value::Tag(
-            iana::CborTag::DateTime as u64,
-            Box::new(Value::Text(string)),
-        );
-        self.insert(key, value)
+        self.insert(key, Value::new_datetime(&date_time))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&HashableCborValue, &Value)> {
@@ -258,7 +228,7 @@ where
 //     }
 // }
 
-pub(crate) mod iana {
+pub mod iana {
     #[repr(u64)]
     pub enum CborTag {
         DateTime = 0,
@@ -327,9 +297,16 @@ pub(crate) mod iana {
 //     }
 // }
 
-pub trait ValueExt {
+pub trait ValueExt
+where
+    Self: Sized,
+{
     fn canonicalize(&mut self);
     fn is_canonical(&self) -> bool;
+    fn new_datetime(datetime: &DateTime<impl TimeZone>) -> Self;
+    fn is_datetime(&self) -> bool;
+    fn as_datetime(&self) -> Option<DateTime<FixedOffset>>;
+    fn into_datetime(self) -> ::std::result::Result<DateTime<FixedOffset>, Self>;
 }
 
 impl ValueExt for Value {
@@ -384,6 +361,35 @@ impl ValueExt for Value {
             }
             _ => panic!("Unsupported CBOR type."),
         }
+    }
+
+    fn new_datetime(datetime: &DateTime<impl TimeZone>) -> Self {
+        Value::Tag(
+            iana::CborTag::DateTime as u64,
+            Box::new(Value::Text(datetime.to_rfc3339())),
+        )
+    }
+
+    fn is_datetime(&self) -> bool {
+        self.as_datetime().is_some()
+    }
+
+    fn as_datetime(&self) -> Option<DateTime<FixedOffset>> {
+        let string = match self {
+            Value::Tag(tag, deref!(Value::Text(string)))
+                if *tag == iana::CborTag::DateTime as u64 =>
+            {
+                string
+            }
+            _ => return None,
+        };
+        let date_time = DateTime::parse_from_rfc3339(string).ok()?;
+
+        Some(date_time)
+    }
+
+    fn into_datetime(self) -> ::std::result::Result<DateTime<FixedOffset>, Self> {
+        self.as_datetime().ok_or(self)
     }
 }
 
