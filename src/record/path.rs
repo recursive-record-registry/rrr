@@ -15,6 +15,8 @@ use super::{HashRecordPath, HashedRecordKey, RecordKey};
 
 pub type RecordName = BytesOrAscii<Vec<u8>>;
 
+pub const RECORD_NAME_ROOT: RecordName = BytesOrAscii(Vec::new());
+
 #[derive(Clone, Debug, Deref, DerefMut)]
 pub struct RecordPath {
     record_names: Vec<RecordName>,
@@ -37,7 +39,7 @@ impl RecordPath {
 impl Default for RecordPath {
     fn default() -> Self {
         Self {
-            record_names: vec![Default::default()],
+            record_names: vec![RECORD_NAME_ROOT],
         }
     }
 }
