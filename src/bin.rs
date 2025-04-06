@@ -1,5 +1,3 @@
-#![feature(async_closure)]
-
 use clap::Parser;
 use color_eyre::eyre::Result;
 use rrr::cmd::RrrArgs;

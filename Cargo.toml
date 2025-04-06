@@ -33,26 +33,26 @@ casey = "0.4.0"
 chrono = { version = "0.4", features = ["arbitrary"] }
 ciborium-io = { version = "^0.2.0", features = ["std"] }
 coset = { version = "0.3.7", features = ["std"] }
-derive_more = "0.99.17"
-ed25519-dalek = { version = "2.1.1", features = ["rand_core", "pem"] }
+derive_more = { version = "2.0", features = ["full"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
 futures = "0.3.30"
 hex-buffer-serde = { version = "0.4.0", features = ["const_len"] }
 hkdf = { version = "0.12.4", features = ["std"] }
-indexmap = "2.2.6"
-itertools = "0.13.0"
-proptest = "1.5.0"
+indexmap = "2.2"
+itertools = "0.14.0"
+proptest = "1.5"
 proptest-arbitrary-interop = "0.1.0"
 proptest-derive = "0.5.0"
-rand = "0.8.5"
-serde = { version = "1.0.203", features = ["derive"] }
-serde_with = "3.8.1"
+rand = "=0.8.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_with = "3.8"
 sha2 = "0.10.8"
 test-strategy = "0.4.0"
-thiserror = "1.0.61"
+thiserror = "2.0"
 tokio = { version = "1.37", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["io-util"] }
 tracing = "0.1.40"
-zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 # Conditionally enabled dependencies
 cbor-diag = { version = "0.1.12", optional = true }
@@ -66,7 +66,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"], optional =
 cddl = "0.9.4"
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 criterion-macro = "0.4.0"
-tempfile = "3.10.1"
+tempfile = "3.10"
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 
 [[bench]]

@@ -309,7 +309,7 @@ impl RegistryConfigKdfBuilder {
 
     pub fn build_with_random_root_predecessor_nonce(
         &self,
-        csprng: impl RngCore + CryptoRng,
+        csprng: impl CryptoRng + RngCore,
     ) -> Result<RegistryConfigKdf> {
         self.build(RegistryConfigKdf::generate_random_root_predecessor_nonce(
             csprng,
@@ -333,7 +333,7 @@ impl RegistryConfigKdf {
     }
 
     pub fn generate_random_root_predecessor_nonce(
-        mut csprng: impl RngCore + CryptoRng,
+        mut csprng: impl CryptoRng + RngCore,
         succession_nonce_length_in_bytes: Option<u64>,
     ) -> SuccessionNonce {
         let succession_nonce_length_in_bytes =
