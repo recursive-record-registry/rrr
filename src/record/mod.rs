@@ -74,7 +74,7 @@ impl TryFrom<&Integer> for RecordMetadataId {
 
     fn try_from(value: &Integer) -> std::result::Result<Self, ()> {
         // Consider using the `num_enum` crate if this becomes cumbersome.
-        let value: u64 = value.clone().try_into().map_err(|_| ())?;
+        let value: u64 = (*value).try_into().map_err(|_| ())?;
         Ok(match value {
             _ if value == Self::CreatedAt as u64 => Self::CreatedAt,
             _ => return Err(()),

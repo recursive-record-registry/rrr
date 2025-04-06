@@ -14,7 +14,6 @@ pub use coset::cbor::Value;
 use indexmap::{Equivalent, IndexMap};
 use serde::{Deserialize, Serialize};
 use serde_with::SerializeAs;
-use thiserror::Error;
 
 use crate::error::{Error, Result};
 

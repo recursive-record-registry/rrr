@@ -35,7 +35,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
 };
 use tokio_util::io::SyncIoBridge;
-use tracing::{info, instrument, warn};
+use tracing::instrument;
 
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
@@ -93,7 +93,7 @@ where
         }
 
         if value < P::RECOMMENDED {
-            warn!(
+            tracing::warn!(
                 "parameter {label:?} is set to the value {value:?} lower than the recommended value of {recommended:?}",
                 label = P::LABEL,
                 value = value,

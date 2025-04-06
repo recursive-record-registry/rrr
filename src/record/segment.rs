@@ -538,7 +538,7 @@ impl Segment {
                         length: plaintext.len() as u64,
                         max_length: encryption.padding_to_bytes,
                     })?;
-                plaintext.extend(std::iter::repeat(0_u8).take(padding_length as usize));
+                plaintext.extend(std::iter::repeat_n(0_u8, padding_length as usize));
                 plaintext
             };
             let encryption_key = fragment_key
