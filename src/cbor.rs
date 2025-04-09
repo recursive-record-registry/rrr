@@ -317,7 +317,7 @@ impl ValueExt for Value {
             Value::Text(_) => (),
             Value::Bool(_) => (),
             Value::Null => (),
-            Value::Tag(_, deref!(value)) => value.canonicalize(),
+            Value::Tag(_, value) => value.canonicalize(),
             Value::Array(array) => {
                 for value in array.iter_mut() {
                     value.canonicalize();
@@ -345,7 +345,7 @@ impl ValueExt for Value {
             Value::Text(_) => true,
             Value::Bool(_) => true,
             Value::Null => true,
-            Value::Tag(_, deref!(value)) => value.is_canonical(),
+            Value::Tag(_, value) => value.is_canonical(),
             Value::Array(array) => array.iter().all(Self::is_canonical),
             Value::Map(map) => {
                 for [(a_key, _), (b_key, _)] in map.array_windows() {
@@ -374,14 +374,28 @@ impl ValueExt for Value {
     }
 
     fn as_datetime(&self) -> Option<DateTime<FixedOffset>> {
-        let string = match self {
-            Value::Tag(tag, deref!(Value::Text(string)))
-                if *tag == iana::CborTag::DateTime as u64 =>
-            {
-                string
-            }
-            _ => return None,
+        // A shorthand that requires deref patterns.
+        // let string = match self {
+        //     Value::Tag(tag, deref!(Value::Text(string)))
+        //         if *tag == iana::CborTag::DateTime as u64 =>
+        //     {
+        //         string
+        //     }
+        //     _ => return None,
+        // };
+
+        let Value::Tag(tag, inner) = self else {
+            return None;
         };
+
+        if *tag != iana::CborTag::DateTime as u64 {
+            return None;
+        }
+
+        let Value::Text(string) = &**inner else {
+            return None;
+        };
+
         let date_time = DateTime::parse_from_rfc3339(string).ok()?;
 
         Some(date_time)

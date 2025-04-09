@@ -1,5 +1,4 @@
 #![feature(array_windows)]
-#![feature(deref_patterns)]
 #![feature(fn_traits)]
 #![feature(try_blocks)]
 #![feature(unboxed_closures)]
