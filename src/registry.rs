@@ -681,6 +681,10 @@ impl Registry<WriteLock> {
         .await
     }
 
+    /// Saves `record` as the version `record_version` of the record at `hash_record_path`, and
+    /// returns the record nonce chosen to avoid file name collisions.
+    ///
+    /// If saving fails, the fragments created by this call are removed.
     pub async fn save_record(
         &mut self,
         signing_keys: &[SigningKey],

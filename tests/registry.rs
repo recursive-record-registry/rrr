@@ -1,11 +1,20 @@
 use rrr::{
+    crypto::encryption::EncryptionAlgorithm,
     crypto::{
         kdf::KdfAlgorithm,
         password_hash::{PasswordHashAlgorithm, argon2::Argon2Params},
     },
     error::Error,
+    record::{
+        Record, RecordPath,
+        segment::{RecordNonce, RecordVersion, SegmentEncryption},
+    },
     registry::{ConfigParam, Registry, RegistryConfig, RegistryConfigHash, RegistryConfigKdf},
-    utils::{fd_lock::ReadLock, fs::temporary_path},
+    utils::{
+        fd_lock::{ReadLock, WriteLock},
+        fs::temporary_path,
+        serde::BytesOrAscii,
+    },
 };
 use std::{path::Path, time::Duration};
 
@@ -208,4 +217,102 @@ async fn save_config_removes_temporary_file_on_failure() {
         .unwrap()
         .exists()
     );
+}
+
+fn record(data: &[u8]) -> Record {
+    Record {
+        metadata: Default::default(),
+        data: BytesOrAscii(data.to_vec()),
+    }
+}
+
+fn fragment_count(registry_path: &Path) -> usize {
+    std::fs::read_dir(
+        Registry::<ReadLock>::get_records_directory_from_registry_directory(registry_path),
+    )
+    .unwrap()
+    .count()
+}
+
+async fn save(
+    registry: &mut Registry<WriteLock>,
+    data: &[u8],
+    max_collision_resolution_attempts: u64,
+    split_at: &[usize],
+    encryption: Option<&SegmentEncryption>,
+    overwrite: bool,
+) -> rrr::error::Result<RecordNonce> {
+    registry
+        .save_record(
+            &[],
+            &RecordPath::default(),
+            &record(data),
+            RecordVersion(0),
+            max_collision_resolution_attempts,
+            split_at,
+            encryption,
+            overwrite,
+        )
+        .await
+}
+
+async fn load(registry: &Registry<WriteLock>, max_collision_resolution_attempts: u64) -> Vec<u8> {
+    registry
+        .load_record(
+            &RecordPath::default(),
+            RecordVersion(0),
+            max_collision_resolution_attempts,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .record
+        .data
+        .0
+        .clone()
+}
+
+#[tokio::test]
+async fn save_record_failure_leaves_no_fragments() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry_path = registry_dir.path().to_path_buf();
+    let mut registry = Registry::create(registry_path.clone(), config(32), false)
+        .await
+        .unwrap();
+    let data = [b'x'; 1000];
+    let encryption = |padding_to_bytes| SegmentEncryption {
+        algorithm: EncryptionAlgorithm::Aes256Gcm,
+        padding_to_bytes,
+    };
+
+    // The first segment fits, and is written before the second one turns out not to.
+    let result = save(
+        &mut registry,
+        &data,
+        0,
+        &[10],
+        Some(&encryption(256)),
+        false,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(Error::SegmentTooLarge { .. })),
+        "{result:?}"
+    );
+    assert_eq!(fragment_count(&registry_path), 0);
+
+    // The save can be retried without overwriting, and without any further record nonces.
+    let nonce = save(
+        &mut registry,
+        &data,
+        0,
+        &[10],
+        Some(&encryption(2048)),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(nonce, RecordNonce(0));
+    assert_eq!(load(&registry, 0).await, data);
 }

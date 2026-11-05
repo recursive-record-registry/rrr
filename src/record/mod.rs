@@ -27,7 +27,7 @@ use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug, io::Cursor};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tracing::{debug, info, instrument, trace, Level};
+use tracing::{debug, info, instrument, trace, warn, Level};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub mod segment;
@@ -570,44 +570,69 @@ impl Record {
         assert_eq!(fragments.len(), segment_sizes.len());
 
         let mut rest = data_buffer.as_slice();
+        // The collision check ensured that none of these files existed, so they can all be
+        // removed if writing the record fails.
+        let mut created_fragment_paths = Vec::with_capacity(fragments.len());
+        let write_result: Result<()> = async {
+            for (segment_index, ((fragment_key, fragment_path), &segment_size)) in
+                iter::zip(&fragments, &segment_sizes).enumerate()
+            {
+                let segment_data;
+                (segment_data, rest) = rest.split_at(segment_size);
+                let segment = Segment {
+                    metadata: {
+                        let mut metadata = SegmentMetadata::default();
+                        metadata.insert_file_tag(
+                            fragment_key.derive_file_tag(&registry.config.kdf).await?,
+                        );
+                        if segment_index == segment_sizes.len() - 1 {
+                            metadata.insert_last();
+                        }
+                        metadata
+                    },
+                    data: BytesOrAscii(segment_data.into()),
+                };
+                let fragment_file = open_options.open(fragment_path).await?;
+                created_fragment_paths.push(fragment_path);
+                let mut fragment_file_guard = fragment_file.lock_write().await?;
 
-        for (segment_index, ((fragment_key, fragment_path), &segment_size)) in
-            iter::zip(&fragments, &segment_sizes).enumerate()
-        {
-            let segment_data;
-            (segment_data, rest) = rest.split_at(segment_size);
-            let segment = Segment {
-                metadata: {
-                    let mut metadata = SegmentMetadata::default();
-                    metadata
-                        .insert_file_tag(fragment_key.derive_file_tag(&registry.config.kdf).await?);
-                    if segment_index == segment_sizes.len() - 1 {
-                        metadata.insert_last();
-                    }
-                    metadata
-                },
-                data: BytesOrAscii(segment_data.into()),
-            };
-            let fragment_file = open_options.open(&fragment_path).await?;
-            let mut fragment_file_guard = fragment_file.lock_write().await?;
+                segment
+                    .write_fragment(
+                        signing_keys,
+                        &registry.config.kdf,
+                        &mut fragment_file_guard,
+                        fragment_key,
+                        encryption,
+                    )
+                    .await?;
 
-            segment
-                .write_fragment(
-                    signing_keys,
-                    &registry.config.kdf,
-                    &mut fragment_file_guard,
-                    fragment_key,
-                    encryption,
-                )
-                .await?;
+                if cfg!(debug_assertions) {
+                    let mut buf = Vec::new();
 
-            if cfg!(debug_assertions) {
-                let mut buf = Vec::new();
-
-                fragment_file_guard.rewind().await?;
-                fragment_file_guard.read_to_end(&mut buf).await?;
-                println!("{:?}:\n{:02x}", fragment_path, buf.iter().format(""));
+                    fragment_file_guard.rewind().await?;
+                    fragment_file_guard.read_to_end(&mut buf).await?;
+                    println!("{:?}:\n{:02x}", fragment_path, buf.iter().format(""));
+                }
             }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = write_result {
+            // Leave no incomplete record behind. Invalid fragments would make the record
+            // impossible to overwrite, and would be treated as collisions by later saves.
+            for fragment_path in created_fragment_paths {
+                if let Err(remove_error) = tokio::fs::remove_file(fragment_path).await {
+                    warn!(
+                        ?fragment_path,
+                        %remove_error,
+                        "Failed to remove a fragment of a record that could not be written"
+                    );
+                }
+            }
+
+            return Err(error);
         }
 
         info!(?record_nonce, "Record written successfully");
