@@ -31,11 +31,11 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    fs::{File, OpenOptions},
-    io::{AsyncRead, AsyncWrite},
+    fs::File,
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
 };
 use tokio_util::io::SyncIoBridge;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
@@ -499,21 +499,50 @@ impl RegistryConfig {
 pub struct Registry<L: FileLock> {
     pub directory_path: PathBuf,
     pub config: RegistryConfig,
-    /// A file lock on the registry config file.
+    /// A lock on the registry lock file, held for as long as the registry is open.
+    /// Readers hold a shared lock, and writers an exclusive one, so that readers block writers.
     file_lock: L,
 }
 
 impl<L: FileLock> Registry<L> {
     pub const RELATIVE_PATH_CONFIG: &'static str = "registry.cbor";
+    /// The file that a new config is written to, before it replaces the config file.
+    /// Only writers use it, so a fixed name suffices.
+    pub const RELATIVE_PATH_CONFIG_TEMPORARY: &'static str = "registry.cbor.tmp";
+    /// The lock file that synchronizes access to the registry. See [`crate::utils::fd_lock`].
+    pub const RELATIVE_PATH_LOCK: &'static str = "registry.lock";
     pub const RELATIVE_PATH_RECORDS: &'static str = "records";
 
-    async fn lock_from_registry_directory<L2: FileLock>(
-        directory_path: impl AsRef<Path>,
-        open_options: &OpenOptions,
-    ) -> Result<L2> {
-        let config_path = Self::get_config_path_from_registry_directory(directory_path.as_ref());
+    async fn lock_registry_directory(directory_path: &Path) -> Result<L> {
+        L::lock(Self::get_lock_path_from_registry_directory(directory_path)).await
+    }
 
-        L2::lock(config_path, open_options).await
+    async fn read_config_from_registry_directory(directory_path: &Path) -> Result<RegistryConfig> {
+        let config_path = Self::get_config_path_from_registry_directory(directory_path);
+        let config_file = File::open(config_path).await?;
+
+        RegistryConfig::read(config_file).await
+    }
+
+    /// Replaces the lock with one of type `L2`, and reloads the config, which another writer
+    /// may have changed while no lock was held.
+    async fn relock<L2: FileLock>(self) -> Result<Registry<L2>> {
+        let Self {
+            directory_path,
+            file_lock,
+            config: _,
+        } = self;
+
+        drop(file_lock);
+
+        let file_lock = Registry::<L2>::lock_registry_directory(&directory_path).await?;
+        let config = Self::read_config_from_registry_directory(&directory_path).await?;
+
+        Ok(Registry {
+            directory_path,
+            config,
+            file_lock,
+        })
     }
 
     pub fn get_config_path_from_registry_directory(directory_path: impl AsRef<Path>) -> PathBuf {
@@ -522,6 +551,22 @@ impl<L: FileLock> Registry<L> {
 
     pub fn get_config_path(&self) -> PathBuf {
         Self::get_config_path_from_registry_directory(&self.directory_path)
+    }
+
+    pub fn get_config_temporary_path_from_registry_directory(
+        directory_path: impl AsRef<Path>,
+    ) -> PathBuf {
+        directory_path
+            .as_ref()
+            .join(Self::RELATIVE_PATH_CONFIG_TEMPORARY)
+    }
+
+    pub fn get_lock_path_from_registry_directory(directory_path: impl AsRef<Path>) -> PathBuf {
+        directory_path.as_ref().join(Self::RELATIVE_PATH_LOCK)
+    }
+
+    pub fn get_lock_path(&self) -> PathBuf {
+        Self::get_lock_path_from_registry_directory(&self.directory_path)
     }
 
     pub fn get_records_directory_from_registry_directory(
@@ -580,14 +625,19 @@ impl<L: FileLock> PartialEq for Registry<L> {
 impl Registry<ReadLock> {
     #[instrument]
     pub async fn open(directory_path: PathBuf) -> Result<Self> {
-        let open_options = {
-            let mut open_options = File::options();
-            open_options.read(true);
-            open_options
-        };
-        let mut file_lock: ReadLock =
-            Self::lock_from_registry_directory(&directory_path, &open_options).await?;
-        let config = RegistryConfig::read(&mut file_lock.inner_mut()).await?;
+        // Check that this is a registry, before creating a lock file in it.
+        let config_path = Self::get_config_path_from_registry_directory(&directory_path);
+
+        if !tokio::fs::try_exists(&config_path).await? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("registry config file not found: {}", config_path.display()),
+            )
+            .into());
+        }
+
+        let file_lock = Self::lock_registry_directory(&directory_path).await?;
+        let config = Self::read_config_from_registry_directory(&directory_path).await?;
 
         Ok(Self {
             directory_path,
@@ -596,24 +646,11 @@ impl Registry<ReadLock> {
         })
     }
 
+    /// Acquires an exclusive lock on the registry.
+    /// The config is reloaded, discarding any changes made to [`Self::config`].
     #[instrument]
     pub async fn lock_write(self) -> Result<Registry<WriteLock>> {
-        let open_options = {
-            let mut open_options = File::options();
-            open_options.read(true);
-            open_options.write(true);
-            open_options.truncate(true);
-            open_options
-        };
-
-        drop(self.file_lock);
-
-        Ok(Registry {
-            file_lock: Self::lock_from_registry_directory(&self.directory_path, &open_options)
-                .await?,
-            directory_path: self.directory_path,
-            config: self.config,
-        })
+        self.relock().await
     }
 }
 
@@ -626,18 +663,24 @@ impl Registry<WriteLock> {
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&directory_path).await?;
 
-        let open_options = {
-            let mut open_options = File::options();
-            open_options.create(overwrite);
-            open_options.create_new(!overwrite);
-            open_options.write(true);
-            open_options.truncate(true);
-            open_options
-        };
+        let file_lock = Self::lock_registry_directory(&directory_path).await?;
+        let config_path = Self::get_config_path_from_registry_directory(&directory_path);
+
+        if !overwrite && tokio::fs::try_exists(&config_path).await? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "registry config file already exists: {}",
+                    config_path.display()
+                ),
+            )
+            .into());
+        }
+
         let mut registry = Self {
-            file_lock: Self::lock_from_registry_directory(&directory_path, &open_options).await?,
             directory_path,
             config,
+            file_lock,
         };
 
         tokio::fs::create_dir_all(registry.get_records_directory()).await?;
@@ -646,8 +689,52 @@ impl Registry<WriteLock> {
         Ok(registry)
     }
 
+    /// Atomically replaces the registry config file with one containing [`Self::config`].
     pub async fn save_config(&mut self) -> Result<()> {
-        self.config.write(self.file_lock.inner_mut()).await?;
+        // Write the new config to a temporary file, and then rename it over the config file, so
+        // that the config file is never left incomplete, even if writing fails.
+        let temporary_path =
+            Self::get_config_temporary_path_from_registry_directory(&self.directory_path);
+
+        if let Err(error) = self.write_config_and_rename(&temporary_path).await {
+            // Do not leave an incomplete config behind, such as after an encoding error.
+            match tokio::fs::remove_file(&temporary_path).await {
+                Err(remove_error) if remove_error.kind() != std::io::ErrorKind::NotFound => {
+                    warn!(
+                        ?temporary_path,
+                        %remove_error,
+                        "Failed to remove the temporary config file."
+                    );
+                }
+                _ => {}
+            }
+
+            return Err(error);
+        }
+
+        // Persist the rename. Not possible on Windows, where directories cannot be opened as files.
+        #[cfg(unix)]
+        File::open(&self.directory_path).await?.sync_all().await?;
+
+        Ok(())
+    }
+
+    /// Writes [`Self::config`] to `temporary_path`, and renames it over the config file.
+    /// The temporary file is closed when this returns, so that it can be removed on Windows.
+    async fn write_config_and_rename(&self, temporary_path: &Path) -> Result<()> {
+        let mut temporary_file = File::options()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(temporary_path)
+            .await?;
+
+        self.config.write(&mut temporary_file).await?;
+        temporary_file.flush().await?;
+        temporary_file.sync_all().await?;
+        drop(temporary_file);
+        tokio::fs::rename(temporary_path, self.get_config_path()).await?;
+
         Ok(())
     }
 
@@ -686,21 +773,10 @@ impl Registry<WriteLock> {
             .await
     }
 
+    /// Downgrades to a shared lock on the registry.
+    /// The config is reloaded, discarding any unsaved changes made to [`Self::config`].
     #[instrument]
     pub async fn lock_read(self) -> Result<Registry<ReadLock>> {
-        let open_options = {
-            let mut open_options = File::options();
-            open_options.read(true);
-            open_options
-        };
-
-        drop(self.file_lock);
-
-        Ok(Registry {
-            file_lock: Self::lock_from_registry_directory(&self.directory_path, &open_options)
-                .await?,
-            directory_path: self.directory_path,
-            config: self.config,
-        })
+        self.relock().await
     }
 }
