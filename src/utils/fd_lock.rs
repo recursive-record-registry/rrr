@@ -31,6 +31,27 @@ pub trait FileLock: Debug + Send + Sync + Sized {
     /// Waits for and acquires a lock on the lock file at `lock_path`, creating the lock file if
     /// it does not exist.
     async fn lock(lock_path: impl AsRef<Path> + Send) -> Result<Self>;
+
+    /// Like [`Self::lock`], but first checks that `required_path` exists, and fails with
+    /// [`ErrorKind::NotFound`] if it does not, without creating the lock file. This avoids
+    /// creating lock files next to files that do not exist, such as in a directory that is
+    /// mistakenly opened as a registry.
+    async fn lock_if_exists(
+        lock_path: impl AsRef<Path> + Send,
+        required_path: impl AsRef<Path> + Send,
+    ) -> Result<Self> {
+        let required_path = required_path.as_ref();
+
+        if !tokio::fs::try_exists(required_path).await? {
+            return Err(std::io::Error::new(
+                ErrorKind::NotFound,
+                format!("file not found: {}", required_path.display()),
+            )
+            .into());
+        }
+
+        Self::lock(lock_path).await
+    }
 }
 
 /// An exclusive lock, held by writers.

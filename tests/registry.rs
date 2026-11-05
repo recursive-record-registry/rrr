@@ -5,7 +5,7 @@ use rrr::{
     },
     error::Error,
     registry::{ConfigParam, Registry, RegistryConfig, RegistryConfigHash, RegistryConfigKdf},
-    utils::fd_lock::ReadLock,
+    utils::{fd_lock::ReadLock, fs::temporary_path},
 };
 use std::{path::Path, time::Duration};
 
@@ -86,8 +86,11 @@ async fn save_config_replaces_previous_config() {
     let registry = Registry::open(registry_path.clone()).await.unwrap();
     assert_eq!(registry.config, final_config);
     assert!(
-        !Registry::<ReadLock>::get_config_temporary_path_from_registry_directory(&registry_path)
-            .exists()
+        !temporary_path(
+            Registry::<ReadLock>::get_config_path_from_registry_directory(&registry_path)
+        )
+        .unwrap()
+        .exists()
     );
 }
 
@@ -199,7 +202,10 @@ async fn save_config_removes_temporary_file_on_failure() {
     registry.save_config().await.unwrap_err();
 
     assert!(
-        !Registry::<ReadLock>::get_config_temporary_path_from_registry_directory(&registry_path)
-            .exists()
+        !temporary_path(
+            Registry::<ReadLock>::get_config_path_from_registry_directory(&registry_path)
+        )
+        .unwrap()
+        .exists()
     );
 }
