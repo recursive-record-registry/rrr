@@ -253,7 +253,9 @@ impl SerializeAs<VerifyingKey> for CoseKey {
                 )
                 .build(),
         };
-        let cbor_value = cose_key.to_cbor_value().unwrap();
+        let cbor_value = cose_key
+            .to_cbor_value()
+            .map_err(serde::ser::Error::custom)?;
 
         cbor_value.serialize(serializer)
     }
@@ -265,7 +267,8 @@ impl<'de> DeserializeAs<'de, VerifyingKey> for CoseKey {
         D: serde::Deserializer<'de>,
     {
         let cbor_value = cbor::Value::deserialize(deserializer)?;
-        let cose_key = CoseKey::from_cbor_value(cbor_value).unwrap();
+        let cose_key = CoseKey::from_cbor_value(cbor_value)
+            .map_err(|error| serde::de::Error::custom(format!("Malformed CoseKey: {error}")))?;
 
         if cose_key.kty != KeyType::Assigned(coset::iana::KeyType::OKP) {
             return Err(serde::de::Error::custom(
@@ -314,11 +317,23 @@ impl<'de> DeserializeAs<'de, VerifyingKey> for CoseKey {
                     })
                     .next()
                     .ok_or_else(|| {
-                        serde::de::Error::custom("CoseKey is missing a `crv` parameter.")
+                        serde::de::Error::custom(
+                            "CoseKey is missing an `x` parameter with a byte string value.",
+                        )
                     })?;
-                let key =
-                    ed25519_dalek::VerifyingKey::from_bytes(&bytes.as_slice().try_into().unwrap())
-                        .unwrap();
+                let bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+                    bytes.as_slice().try_into().map_err(|_| {
+                        serde::de::Error::custom(format!(
+                            "CoseKey has an `x` parameter of {} bytes, expected {} bytes for an Ed25519 public key.",
+                            bytes.len(),
+                            ed25519_dalek::PUBLIC_KEY_LENGTH,
+                        ))
+                    })?;
+                let key = ed25519_dalek::VerifyingKey::from_bytes(bytes).map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "CoseKey has an `x` parameter that is not a valid Ed25519 public key: {error}"
+                    ))
+                })?;
 
                 Ok(VerifyingKey::Ed25519(VerifyingKeyEd25519(key)))
             }
@@ -381,8 +396,97 @@ impl ZeroizeOnDrop for VerifyingKey {}
 
 #[cfg(test)]
 mod test {
+    use coset::{AsCborValue, CoseKey, CoseKeyBuilder, iana};
+    use serde::{Deserialize, Serialize};
+    use serde_with::serde_as;
+
+    use super::{SigningKey, SigningKeyEd25519, VerifyingKey};
+    use crate::{cbor, utils::serde::Secret};
+
     #[tokio::test]
     pub async fn test_pem() {
         // TODO
+    }
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(transparent)]
+    struct AsCoseKey(#[serde_as(as = "CoseKey")] VerifyingKey);
+
+    fn ed25519_cose_key(x: cbor::Value) -> cbor::Value {
+        CoseKeyBuilder::new_okp_key()
+            .algorithm(iana::Algorithm::EdDSA)
+            .param(
+                iana::OkpKeyParameter::Crv as i64,
+                cbor::Value::from(iana::EllipticCurve::Ed25519 as u64),
+            )
+            .param(iana::OkpKeyParameter::X as i64, x)
+            .build()
+            .to_cbor_value()
+            .unwrap()
+    }
+
+    fn deserialize(value: cbor::Value) -> Result<VerifyingKey, coset::cbor::value::Error> {
+        value.deserialized::<AsCoseKey>().map(|AsCoseKey(key)| key)
+    }
+
+    #[test]
+    fn verifying_key_cose_key_roundtrip() {
+        let signing_key = SigningKey::Ed25519(Secret(SigningKeyEd25519(
+            ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
+        )));
+        let verifying_key = VerifyingKey::from(&signing_key);
+        let value = cbor::Value::serialized(&AsCoseKey(verifying_key.clone())).unwrap();
+
+        assert_eq!(deserialize(value).unwrap(), verifying_key);
+    }
+
+    #[test]
+    fn verifying_key_rejects_non_cose_key() {
+        assert!(deserialize(cbor::Value::Integer(5.into())).is_err());
+        assert!(deserialize(cbor::Value::Map(vec![])).is_err());
+    }
+
+    #[test]
+    fn verifying_key_rejects_missing_x() {
+        let value = CoseKeyBuilder::new_okp_key()
+            .param(
+                iana::OkpKeyParameter::Crv as i64,
+                cbor::Value::from(iana::EllipticCurve::Ed25519 as u64),
+            )
+            .build()
+            .to_cbor_value()
+            .unwrap();
+
+        assert!(deserialize(value).is_err());
+        assert!(deserialize(ed25519_cose_key(cbor::Value::Integer(0.into()))).is_err());
+    }
+
+    #[test]
+    fn verifying_key_rejects_x_of_wrong_length() {
+        for length in [0, 31, 33, 64] {
+            let value = ed25519_cose_key(cbor::Value::Bytes(vec![0; length]));
+
+            assert!(
+                deserialize(value).is_err(),
+                "accepted `x` of {length} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn verifying_key_rejects_x_not_on_curve() {
+        // Find a compressed point that does not decompress to a point on the curve.
+        let invalid_x = (0..=u8::MAX)
+            .map(|byte| {
+                let mut bytes = [0; 32];
+                bytes[0] = byte;
+                bytes
+            })
+            .find(|bytes| ed25519_dalek::VerifyingKey::from_bytes(bytes).is_err())
+            .expect("an invalid compressed Ed25519 point should exist among the candidates");
+        let value = ed25519_cose_key(cbor::Value::Bytes(invalid_x.to_vec()));
+
+        assert!(deserialize(value).is_err());
     }
 }
