@@ -688,9 +688,9 @@ impl Registry<WriteLock> {
     /// index up to `max_collision_resolution_attempts`, is removed first. Fragments of other
     /// records, whose file names collide with this record's, are kept. Any other file found in
     /// place of one of the record's fragments is reported as an error.
-    /// Overwriting a version that has already been published reuses its encryption keys, and is
-    /// a security violation; publish a new version instead. See [`RecordVersion`]. TODO: Address
-    /// this by using AES-GCM-SIV instead of AES-GCM.
+    /// Overwriting a version that has already been published reuses its encryption keys, which
+    /// reveals to readers holding both copies whether the contents changed; publish a new version
+    /// instead. See [`RecordVersion`].
     ///
     /// If saving fails, the fragments created by this call are removed.
     pub async fn save_record(

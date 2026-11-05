@@ -1,4 +1,6 @@
+use coset::{AsCborValue, CborSerializable, CoseEncrypt0, TaggedCborSerializable};
 use rrr::{
+    cbor::{TAG_RRR_FRAGMENT, TAG_SELF_DESCRIBED_CBOR, Value},
     crypto::encryption::EncryptionAlgorithm,
     crypto::{
         kdf::KdfAlgorithm,
@@ -236,7 +238,7 @@ fn encryptions() -> [Option<SegmentEncryption>; 2] {
     [
         None,
         Some(SegmentEncryption {
-            algorithm: EncryptionAlgorithm::Aes256Gcm,
+            algorithm: EncryptionAlgorithm::Aes256GcmSiv,
             padding_to_bytes: 1024,
         }),
     ]
@@ -454,7 +456,7 @@ async fn save_record_failure_leaves_no_fragments() {
         .unwrap();
     let data = [b'x'; 1000];
     let encryption = |padding_to_bytes| SegmentEncryption {
-        algorithm: EncryptionAlgorithm::Aes256Gcm,
+        algorithm: EncryptionAlgorithm::Aes256GcmSiv,
         padding_to_bytes,
     };
 
@@ -488,4 +490,74 @@ async fn save_record_failure_leaves_no_fragments() {
     .unwrap();
     assert_eq!(collision_index, CollisionIndex(0));
     assert_eq!(load(&registry, 0).await, data);
+}
+
+/// Splits an unsigned, encrypted fragment file into its COSE_Encrypt0 structure.
+fn decode_unsigned_encrypted_fragment(bytes: &[u8]) -> CoseEncrypt0 {
+    let mut value = Value::from_slice(bytes).unwrap();
+
+    for expected_tag in [TAG_SELF_DESCRIBED_CBOR, TAG_RRR_FRAGMENT, CoseEncrypt0::TAG] {
+        let Value::Tag(tag, inner) = value else {
+            panic!("expected the CBOR tag {expected_tag}, found {value:?}");
+        };
+        assert_eq!(tag, expected_tag);
+        value = *inner;
+    }
+
+    CoseEncrypt0::from_cbor_value(value).unwrap()
+}
+
+/// Inverse of [`decode_unsigned_encrypted_fragment`].
+fn encode_unsigned_encrypted_fragment(encrypted: CoseEncrypt0) -> Vec<u8> {
+    let mut value = encrypted.to_cbor_value().unwrap();
+
+    for tag in [CoseEncrypt0::TAG, TAG_RRR_FRAGMENT, TAG_SELF_DESCRIBED_CBOR] {
+        value = Value::Tag(tag, Box::new(value));
+    }
+
+    value.to_vec().unwrap()
+}
+
+#[tokio::test]
+async fn fragments_are_encrypted_with_aes_256_gcm_siv() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry_path = registry_dir.path().to_path_buf();
+    let mut registry = Registry::create(registry_path.clone(), config(32), false)
+        .await
+        .unwrap();
+    let encryption = SegmentEncryption {
+        algorithm: EncryptionAlgorithm::Aes256GcmSiv,
+        padding_to_bytes: 1024,
+    };
+
+    save(&mut registry, b"data", 0, &[], Some(&encryption), false)
+        .await
+        .unwrap();
+    assert_eq!(load(&registry, 0).await, b"data");
+
+    // AES-GCM-SIV has no registered COSE algorithm identifier, so a private-use value is written.
+    let (fragment_key, fragment_path) = first_fragment(&registry).await;
+    let mut encrypted = decode_unsigned_encrypted_fragment(&std::fs::read(&fragment_path).unwrap());
+    assert_eq!(
+        encrypted.protected.header.alg,
+        Some(coset::Algorithm::PrivateUse(-69173)),
+    );
+
+    // Fragments labelled as AES-GCM, as written by earlier versions of rrr, are rejected.
+    let aes_gcm = coset::Algorithm::Assigned(coset::iana::Algorithm::A256GCM);
+    encrypted.protected.header.alg = Some(aes_gcm.clone());
+    encrypted.protected.original_data = None;
+    std::fs::write(
+        &fragment_path,
+        encode_unsigned_encrypted_fragment(encrypted),
+    )
+    .unwrap();
+
+    let error = Segment::read_fragment(&registry, &fragment_key)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::UnrecognizedEncryptionAlgorithm { alg: Some(alg) } if *alg == aes_gcm),
+        "{error:?}"
+    );
 }

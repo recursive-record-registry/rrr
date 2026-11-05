@@ -41,7 +41,7 @@ Launch it by running the following:
     * [x] Tests
     * [x] Command line implementation
 * [ ] Support multiple encryption algorithms, that are supported by the COSE and PEM specs.
-    * [x] AES-256-GCM
+    * [x] AES-256-GCM-SIV
     * [ ] ChaCha20-Poly1305
     * [ ] Make them optional at compile-time.
 * [ ] Support multiple signing algorithms, that are supported by the COSE and PEM specs.

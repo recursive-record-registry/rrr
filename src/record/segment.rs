@@ -149,9 +149,10 @@ newtype! {
 newtype! {
     #[doc = "
         Records are versioned, so that updated versions of records can be published.
-        This field is used to ensure that encryption keys are unique for each version
-        of a published record. Publishing different versions of the same record with an equal
-        version number is a security violation.
+        Each version of a record is encrypted with its own keys. Publishing different contents
+        under an already published version reuses that version's keys. AES-GCM-SIV keeps this
+        from compromising confidentiality, but readers holding the earlier contents can tell
+        that they changed, so publish a new version instead.
     "]
     #[derive(Debug, Arbitrary)]
     pub RecordVersion(pub u64);
@@ -551,7 +552,7 @@ impl Segment {
                     HeaderBuilder::new()
                         // Placed in the `protected` fields according to
                         // https://datatracker.ietf.org/doc/html/rfc8152#section-3.1
-                        .algorithm(encryption.algorithm.into())
+                        .algorithm_label(encryption.algorithm.into())
                         // .content_type("application/binary".to_string()) // TODO
                         .build(),
                 )

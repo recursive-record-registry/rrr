@@ -22,7 +22,7 @@ pub enum Error {
     #[error("CBOR: {0}")]
     Cbor(coset::cbor::value::Error),
     #[error("Cipher: {0}")]
-    Cipher(#[from] aes_gcm::Error),
+    Cipher(#[from] aes_gcm_siv::Error),
     #[error("Sign: {0}")]
     Sign(#[from] ed25519_dalek::ed25519::signature::Error),
     #[error("Unexpected item: {0}")]
