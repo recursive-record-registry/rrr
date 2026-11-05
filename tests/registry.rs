@@ -6,8 +6,11 @@ use rrr::{
     },
     error::Error,
     record::{
-        Record, RecordPath,
-        segment::{RecordNonce, RecordVersion, SegmentEncryption},
+        HashRecordPath, Record, RecordPath,
+        segment::{
+            FragmentKey, KdfUsageFragmentParameters, RecordNonce, RecordParameters, RecordVersion,
+            Segment, SegmentEncryption,
+        },
     },
     registry::{ConfigParam, Registry, RegistryConfig, RegistryConfigHash, RegistryConfigKdf},
     utils::{
@@ -16,7 +19,10 @@ use rrr::{
         serde::BytesOrAscii,
     },
 };
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// A config with cheap password hashing, and a random root predecessor nonce of the given length.
 fn config(succession_nonce_length_in_bytes: u64) -> RegistryConfig {
@@ -226,6 +232,16 @@ fn record(data: &[u8]) -> Record {
     }
 }
 
+fn encryptions() -> [Option<SegmentEncryption>; 2] {
+    [
+        None,
+        Some(SegmentEncryption {
+            algorithm: EncryptionAlgorithm::Aes256Gcm,
+            padding_to_bytes: 1024,
+        }),
+    ]
+}
+
 fn fragment_count(registry_path: &Path) -> usize {
     std::fs::read_dir(
         Registry::<ReadLock>::get_records_directory_from_registry_directory(registry_path),
@@ -270,6 +286,163 @@ async fn load(registry: &Registry<WriteLock>, max_collision_resolution_attempts:
         .data
         .0
         .clone()
+}
+
+#[tokio::test]
+async fn save_record_overwrites_same_version() {
+    for encryption in encryptions() {
+        let registry_dir = tempfile::tempdir().unwrap();
+        let registry_path = registry_dir.path().to_path_buf();
+        let mut registry = Registry::create(registry_path.clone(), config(32), false)
+            .await
+            .unwrap();
+
+        // The previous record has more segments than the new one, all of which must be removed.
+        let nonce = save(
+            &mut registry,
+            b"previous record",
+            0,
+            &[4, 8],
+            encryption.as_ref(),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(nonce, RecordNonce(0));
+        assert_eq!(fragment_count(&registry_path), 3);
+
+        let nonce = save(
+            &mut registry,
+            b"new record",
+            0,
+            &[],
+            encryption.as_ref(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(nonce, RecordNonce(0));
+        assert_eq!(load(&registry, 0).await, b"new record");
+        assert_eq!(fragment_count(&registry_path), 1);
+    }
+}
+
+#[tokio::test]
+async fn save_record_without_overwrite_keeps_existing_record() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry_path = registry_dir.path().to_path_buf();
+    let mut registry = Registry::create(registry_path.clone(), config(32), false)
+        .await
+        .unwrap();
+
+    save(&mut registry, b"previous record", 0, &[], None, false)
+        .await
+        .unwrap();
+    let result = save(&mut registry, b"new record", 0, &[], None, false).await;
+
+    assert!(
+        matches!(result, Err(Error::CollisionResolutionFailed)),
+        "{result:?}"
+    );
+    assert_eq!(load(&registry, 0).await, b"previous record");
+}
+
+/// Returns the contents of the only fragment of a record, saved in a separate registry.
+async fn fragment_of_another_record(encryption: Option<&SegmentEncryption>) -> Vec<u8> {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry_path = registry_dir.path().to_path_buf();
+    let mut registry = Registry::create(registry_path.clone(), config(32), false)
+        .await
+        .unwrap();
+
+    save(&mut registry, b"another record", 0, &[], encryption, false)
+        .await
+        .unwrap();
+
+    let records_path =
+        Registry::<ReadLock>::get_records_directory_from_registry_directory(&registry_path);
+    let mut fragment_paths = std::fs::read_dir(records_path).unwrap();
+    let fragment_path = fragment_paths.next().unwrap().unwrap().path();
+    assert!(fragment_paths.next().is_none());
+    std::fs::read(fragment_path).unwrap()
+}
+
+/// Returns the key and path of the record's first fragment with nonce 0.
+async fn first_fragment(registry: &Registry<WriteLock>) -> (FragmentKey, PathBuf) {
+    let fragment_key = FragmentKey {
+        hashed_record_key: RecordPath::default()
+            .hash_record_path(registry)
+            .await
+            .unwrap(),
+        fragment_parameters: KdfUsageFragmentParameters {
+            record_parameters: RecordParameters {
+                version: RecordVersion(0),
+                nonce: RecordNonce(0),
+            },
+            segment_index: 0.into(),
+        },
+    };
+    let fragment_path = registry.get_fragment_path(
+        &fragment_key
+            .derive_file_name(&registry.config.kdf)
+            .await
+            .unwrap(),
+    );
+
+    (fragment_key, fragment_path)
+}
+
+#[tokio::test]
+async fn save_record_overwrite_keeps_colliding_fragments_of_other_records() {
+    for encryption in encryptions() {
+        let colliding_file = fragment_of_another_record(encryption.as_ref()).await;
+        let registry_dir = tempfile::tempdir().unwrap();
+        let registry_path = registry_dir.path().to_path_buf();
+        let mut registry = Registry::create(registry_path.clone(), config(32), false)
+            .await
+            .unwrap();
+
+        let (fragment_key, colliding_path) = first_fragment(&registry).await;
+        std::fs::write(&colliding_path, &colliding_file).unwrap();
+
+        // Make sure that both ways of telling fragments of other records apart are covered.
+        let error = Segment::read_fragment(&registry, &fragment_key)
+            .await
+            .unwrap_err();
+        match &encryption {
+            None => assert!(matches!(error, Error::FileTagMismatch), "{error:?}"),
+            Some(_) => assert!(matches!(error, Error::Cipher(_)), "{error:?}"),
+        }
+
+        // The previous record ends up under nonce 1, and so must the new one.
+        for data in [&b"previous record"[..], b"new record"] {
+            let nonce = save(&mut registry, data, 1, &[], encryption.as_ref(), true)
+                .await
+                .unwrap();
+            assert_eq!(nonce, RecordNonce(1));
+            assert_eq!(load(&registry, 1).await, data);
+            assert_eq!(std::fs::read(&colliding_path).unwrap(), colliding_file);
+            assert_eq!(fragment_count(&registry_path), 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn save_record_overwrite_fails_on_invalid_fragment() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry_path = registry_dir.path().to_path_buf();
+    let mut registry = Registry::create(registry_path.clone(), config(32), false)
+        .await
+        .unwrap();
+
+    let (_, invalid_path) = first_fragment(&registry).await;
+    std::fs::write(&invalid_path, b"not a fragment").unwrap();
+
+    let result = save(&mut registry, b"new record", 1, &[], None, true).await;
+
+    assert!(matches!(result, Err(Error::Coset(_))), "{result:?}");
+    assert_eq!(std::fs::read(&invalid_path).unwrap(), b"not a fragment");
+    assert_eq!(fragment_count(&registry_path), 1);
 }
 
 #[tokio::test]

@@ -471,6 +471,53 @@ impl Record {
         Ok(versions)
     }
 
+    /// Removes the fragments of the record with the specified record version, saved under any
+    /// record nonce up to `max_collision_resolution_attempts`.
+    ///
+    /// Only fragments that can be read with the record's key are removed, so fragments of other
+    /// records whose names collide with this record's fragments are kept.
+    /// Fails if any other file is found in place of one of this record's fragments.
+    #[instrument(level = Level::TRACE, err)]
+    pub(crate) async fn remove_version(
+        registry: &Registry<WriteLock>,
+        hash_record_path: &(impl HashRecordPath + Debug),
+        record_version: RecordVersion,
+        max_collision_resolution_attempts: u64,
+    ) -> Result<()> {
+        let hashed_key = hash_record_path.hash_record_path(registry).await?;
+
+        for record_nonce in (0..=max_collision_resolution_attempts).map(RecordNonce) {
+            let stream =
+                Self::read_segments(registry, &hashed_key, record_version, record_nonce).await?;
+
+            pin_mut!(stream);
+
+            // The stream ends after the last segment of the record.
+            while let Some(item) = stream.next().await {
+                let segment = match item {
+                    Ok(Some(segment)) => segment,
+                    // A missing segment ends the record.
+                    Ok(None) => break,
+                    // The file is a fragment of another record, unencrypted or encrypted with
+                    // another key, respectively. Like readers, skip to the next nonce.
+                    Err(Error::FileTagMismatch | Error::Cipher(_)) => break,
+                    // Failed saves leave no fragments behind, so any other error means that the
+                    // registry is damaged, or that the record could not be checked.
+                    Err(error) => return Err(error),
+                };
+                let fragment_path = registry.get_fragment_path(&segment.fragment_file_name);
+
+                tokio::fs::remove_file(&fragment_path).await?;
+                debug!(
+                    ?fragment_path,
+                    "Removed a fragment of an overwritten record"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     #[instrument(level = Level::TRACE, ret, err)]
     pub async fn write_version(
         &self,
