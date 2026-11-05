@@ -6,7 +6,7 @@ use crate::registry::Registry;
 use crate::utils::fd_lock::{FileLock, WriteLock};
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::LockWrite;
-use chrono::{DateTime, FixedOffset, TimeZone};
+use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 use coset::cbor::tag;
 use coset::cbor::value::Integer;
 use derive_more::{Deref, DerefMut};
@@ -15,7 +15,6 @@ use itertools::Itertools;
 use proptest::arbitrary::Arbitrary;
 use proptest::prop_compose;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_arbitrary_interop::arb;
 use proptest_derive::Arbitrary;
 use segment::{
     FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters, RecordNonce, RecordParameters,
@@ -131,12 +130,39 @@ impl RecordMetadata {
     }
 }
 
+/// Generates date-times that are representable in the RFC 3339 format:
+/// years 0000 through 9999 (in both UTC and the local offset), offsets with minute precision,
+/// and no leap seconds.
+fn arb_rfc3339_datetime() -> impl Strategy<Value = DateTime<FixedOffset>> {
+    const MAX_OFFSET_MINUTES: i32 = 24 * 60 - 1;
+    // Keep a day of margin on both ends, so that applying the offset does not leave the range.
+    let timestamp_of = |year, month, day| {
+        NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    };
+    let min_timestamp = timestamp_of(0, 1, 2);
+    let max_timestamp = timestamp_of(9999, 12, 31) - 1;
+
+    (
+        min_timestamp..=max_timestamp,
+        0..1_000_000_000_u32,
+        -MAX_OFFSET_MINUTES..=MAX_OFFSET_MINUTES,
+    )
+        .prop_map(|(timestamp, nanoseconds, offset_minutes)| {
+            let offset = FixedOffset::east_opt(offset_minutes * 60).unwrap();
+            DateTime::from_timestamp(timestamp, nanoseconds)
+                .unwrap()
+                .with_timezone(&offset)
+        })
+}
+
 prop_compose! {
     fn arb_record_metadata()(
-        // FIXME: Filtering is suboptimal.
-        created_at in arb::<Option<DateTime<FixedOffset>>>().prop_filter("Ability to parse from RFC3339 format", |datetime| {
-            datetime.map(|datetime| DateTime::parse_from_rfc3339(&datetime.to_rfc3339()).is_ok()).unwrap_or(true)
-        }),
+        created_at in proptest::option::of(arb_rfc3339_datetime()),
     ) -> RecordMetadata {
         let mut result = RecordMetadata::default();
 

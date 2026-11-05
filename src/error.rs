@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use async_fd_lock::LockError;
-use coset::RegisteredLabel;
+use coset::RegisteredLabelWithPrivate;
 use derive_more::From;
 use thiserror::Error;
 
@@ -33,7 +33,7 @@ pub enum Error {
     Join(#[from] tokio::task::JoinError),
     #[error("Unrecognized critical field in header: {field:?}")]
     UnrecognizedCriticalField {
-        field: RegisteredLabel<coset::iana::HeaderParameter>,
+        field: RegisteredLabelWithPrivate<coset::iana::HeaderParameter>,
     },
     #[error("Signature verification failed")]
     SignatureVerificationFailed,

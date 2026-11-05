@@ -1,6 +1,4 @@
-#![feature(array_windows)]
 #![feature(fn_traits)]
-#![feature(try_blocks)]
 #![feature(unboxed_closures)]
 
 use coset::cbor::cbor;

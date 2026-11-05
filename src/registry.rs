@@ -20,7 +20,7 @@ use proptest::collection::vec;
 use proptest::prop_compose;
 use proptest::strategy::{BoxedStrategy, Just, Strategy};
 use proptest_derive::Arbitrary;
-use rand::{CryptoRng, RngCore};
+use rand::CryptoRng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Display;
@@ -309,7 +309,7 @@ impl RegistryConfigKdfBuilder {
 
     pub fn build_with_random_root_predecessor_nonce(
         &self,
-        csprng: impl CryptoRng + RngCore,
+        csprng: impl CryptoRng,
     ) -> Result<RegistryConfigKdf> {
         self.build(RegistryConfigKdf::generate_random_root_predecessor_nonce(
             csprng,
@@ -333,7 +333,7 @@ impl RegistryConfigKdf {
     }
 
     pub fn generate_random_root_predecessor_nonce(
-        mut csprng: impl CryptoRng + RngCore,
+        mut csprng: impl CryptoRng,
         succession_nonce_length_in_bytes: Option<u64>,
     ) -> SuccessionNonce {
         let succession_nonce_length_in_bytes =

@@ -1,7 +1,6 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(criterion::runner)]
 
-use aes_gcm::aead::OsRng;
 use criterion::Criterion;
 use criterion_macro::criterion;
 use rrr::{
@@ -33,7 +32,7 @@ fn bench_hash_params(c: &mut Criterion) {
         }))
         .with_file_name_length_in_bytes(8)
         .with_succession_nonce_length_in_bytes(32)
-        .build_with_random_root_predecessor_nonce(OsRng)
+        .build_with_random_root_predecessor_nonce(rand::rng())
         .unwrap();
     let key = RecordKey {
         record_name: RecordName::from(b"hello".to_vec()),

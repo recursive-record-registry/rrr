@@ -441,12 +441,14 @@ impl Segment {
                 let encryption_key = fragment_key
                     .derive_encryption_key(kdf_params, &encryption_algorithm)
                     .await?;
-                let plaintext = encrypted.decrypt(
+                let decrypt = Decrypt {
+                    algorithm: &encryption_algorithm,
+                    key: &encryption_key,
+                };
+                let plaintext = encrypted.decrypt_ciphertext(
                     &[],
-                    Decrypt {
-                        algorithm: &encryption_algorithm,
-                        key: &encryption_key,
-                    },
+                    || Error::MalformedFragment,
+                    |ciphertext, aad| decrypt(ciphertext, aad).map_err(Error::from),
                 )?;
 
                 let mut plaintext_cursor = Cursor::new(plaintext.as_slice());

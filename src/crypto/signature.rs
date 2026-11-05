@@ -5,8 +5,8 @@ use derive_more::{Deref, DerefMut};
 use ed25519_dalek::{
     ed25519::signature::Signer,
     pkcs8::{
-        self, spki::der::Decode, DecodePrivateKey, EncodePrivateKey, ObjectIdentifier,
-        PrivateKeyInfo,
+        self, DecodePrivateKey, EncodePrivateKey, KeyError, ObjectIdentifier, PrivateKeyInfoRef,
+        spki::der::Decode,
     },
 };
 use itertools::Itertools;
@@ -82,13 +82,13 @@ impl EncodePrivateKey for SigningKey {
 
 impl DecodePrivateKey for SigningKey {
     fn from_pkcs8_der(bytes: &[u8]) -> pkcs8::Result<Self> {
-        let info = PrivateKeyInfo::from_der(bytes)?;
+        let info = PrivateKeyInfoRef::from_der(bytes)?;
 
         match info.algorithm.oid {
             oid if oid == ObjectIdentifier::new_unwrap("1.3.101.112") => Ok(Self::Ed25519(Secret(
                 SigningKeyEd25519(ed25519_dalek::SigningKey::try_from(info)?),
             ))),
-            _ => Err(pkcs8::Error::KeyMalformed),
+            _ => Err(pkcs8::Error::KeyMalformed(KeyError::Invalid)),
         }
     }
 }
