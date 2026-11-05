@@ -120,8 +120,8 @@ async fn verify_cddl_fragment(
         hashed_record_key: hashed_record_key.clone(),
         fragment_parameters: KdfUsageFragmentParameters {
             record_parameters: RecordParameters {
-                version: 0.into(), // TODO
-                nonce: 0.into(),   // TODO
+                version: 0.into(),         // TODO
+                collision_index: 0.into(), // TODO
             },
             segment_index: 0.into(), // TODO
         },

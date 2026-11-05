@@ -4,7 +4,7 @@ use crate::crypto::password_hash::PasswordHashAlgorithm;
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, InvalidParameterError, OptionExt, Result};
 use crate::record::segment::{
-    FragmentFileNameBytes, RecordNonce, RecordVersion, SegmentEncryption,
+    CollisionIndex, FragmentFileNameBytes, RecordVersion, SegmentEncryption,
 };
 use crate::record::{
     HashRecordPath, Record, RecordListVersionsItem, RecordReadVersionSuccess, SuccessionNonce,
@@ -682,10 +682,10 @@ impl Registry<WriteLock> {
     }
 
     /// Saves `record` as the version `record_version` of the record at `hash_record_path`, and
-    /// returns the record nonce chosen to avoid file name collisions.
+    /// returns the collision index chosen to avoid file name collisions.
     ///
-    /// If `overwrite` is `true`, any record already saved with this version, under any record
-    /// nonce up to `max_collision_resolution_attempts`, is removed first. Fragments of other
+    /// If `overwrite` is `true`, any record already saved with this version, under any collision
+    /// index up to `max_collision_resolution_attempts`, is removed first. Fragments of other
     /// records, whose file names collide with this record's, are kept. Any other file found in
     /// place of one of the record's fragments is reported as an error.
     /// Overwriting a version that has already been published reuses its encryption keys, and is
@@ -703,12 +703,12 @@ impl Registry<WriteLock> {
         split_at: &[usize],
         encryption: Option<&SegmentEncryption>,
         overwrite: bool,
-    ) -> Result<RecordNonce> {
+    ) -> Result<CollisionIndex> {
         let hashed_record_key = hash_record_path.hash_record_path(self).await?;
 
-        // Readers use the lowest record nonce under which the record can be read, so the new
-        // record would not be found if the previous one were left under a lower nonce. The
-        // previous record's fragments would also be treated as file name collisions.
+        // Readers use the lowest collision index under which the record can be read, so the new
+        // record would not be found if the previous one were left under a lower collision index.
+        // The previous record's fragments would also be treated as file name collisions.
         if overwrite {
             Record::remove_version(
                 self,

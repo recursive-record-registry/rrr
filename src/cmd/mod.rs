@@ -261,7 +261,7 @@ impl RrrArgs {
 
                     for version in &versions {
                         println!("- version {}:", *version.record_version);
-                        println!("  - nonce: {}", *version.record_nonce);
+                        println!("  - collision index: {}", *version.collision_index);
                         println!("  - segments:");
 
                         for segment in &version.segments {
@@ -302,13 +302,13 @@ impl RrrArgs {
                         .ok_or_else(|| eyre!("record not found: {record_path}"))?;
 
                     println!("# Record parameters");
-                    println!("- path:          {}", record_path.iter().format(" "));
-                    println!("- name:          {}", record_path.last());
-                    println!("- version:       {}", *record_version);
-                    println!("- nonce:         {}", *record.record_nonce);
-                    println!("- content bytes: {}", record.data.len());
+                    println!("- path:            {}", record_path.iter().format(" "));
+                    println!("- name:            {}", record_path.last());
+                    println!("- version:         {}", *record_version);
+                    println!("- collision index: {}", *record.collision_index);
+                    println!("- content bytes:   {}", record.data.len());
                     println!(
-                        "- total bytes:   {}",
+                        "- total bytes:     {}",
                         record
                             .segments
                             .iter()

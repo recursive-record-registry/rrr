@@ -134,7 +134,7 @@ serde_with::with_prefix!(prefix_record "record_");
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
 pub struct RecordParameters {
     pub version: RecordVersion,
-    pub nonce: RecordNonce,
+    pub collision_index: CollisionIndex,
 }
 
 newtype! {
@@ -160,14 +160,14 @@ newtype! {
 newtype! {
     #[doc = "
         Used to resolve collisions in file names. Starts at 0, and is incremented if a collision is
-        encountered for any of the record fragemnts. It is assumed that for each version of a
-        record, a single nonce is chosen. In other words, for a given record version, record fragments
-        with varying record nonces should **not** exist. This fact is used to optimize record
-        browsing, such that only the record with the lowest nonce is shown, and record fragments with
-        higher nonces are not even considered.
+        encountered for any of the record fragments. It is assumed that for each version of a
+        record, a single collision index is chosen. In other words, for a given record version,
+        record fragments with varying collision indices should **not** exist. This fact is used to
+        optimize record browsing, such that only the record with the lowest collision index is
+        shown, and record fragments with higher collision indices are not even considered.
     "]
     #[derive(Debug, Arbitrary)]
-    pub RecordNonce(pub u64);
+    pub CollisionIndex(pub u64);
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]

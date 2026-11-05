@@ -21,7 +21,7 @@ RRR_KdfUsage_Fragment = (
             // RRR_KdfUsage_Fragment_Usage_FileTag
         },
         parameters: {
-            record_nonce: uint,
+            record_collision_index: uint,
             segment_index: uint,
             record_version: uint,
         },

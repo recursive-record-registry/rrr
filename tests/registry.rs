@@ -8,8 +8,8 @@ use rrr::{
     record::{
         HashRecordPath, Record, RecordPath,
         segment::{
-            FragmentKey, KdfUsageFragmentParameters, RecordNonce, RecordParameters, RecordVersion,
-            Segment, SegmentEncryption,
+            CollisionIndex, FragmentKey, KdfUsageFragmentParameters, RecordParameters,
+            RecordVersion, Segment, SegmentEncryption,
         },
     },
     registry::{ConfigParam, Registry, RegistryConfig, RegistryConfigHash, RegistryConfigKdf},
@@ -257,7 +257,7 @@ async fn save(
     split_at: &[usize],
     encryption: Option<&SegmentEncryption>,
     overwrite: bool,
-) -> rrr::error::Result<RecordNonce> {
+) -> rrr::error::Result<CollisionIndex> {
     registry
         .save_record(
             &[],
@@ -298,7 +298,7 @@ async fn save_record_overwrites_same_version() {
             .unwrap();
 
         // The previous record has more segments than the new one, all of which must be removed.
-        let nonce = save(
+        let collision_index = save(
             &mut registry,
             b"previous record",
             0,
@@ -308,10 +308,10 @@ async fn save_record_overwrites_same_version() {
         )
         .await
         .unwrap();
-        assert_eq!(nonce, RecordNonce(0));
+        assert_eq!(collision_index, CollisionIndex(0));
         assert_eq!(fragment_count(&registry_path), 3);
 
-        let nonce = save(
+        let collision_index = save(
             &mut registry,
             b"new record",
             0,
@@ -321,7 +321,7 @@ async fn save_record_overwrites_same_version() {
         )
         .await
         .unwrap();
-        assert_eq!(nonce, RecordNonce(0));
+        assert_eq!(collision_index, CollisionIndex(0));
         assert_eq!(load(&registry, 0).await, b"new record");
         assert_eq!(fragment_count(&registry_path), 1);
     }
@@ -367,7 +367,7 @@ async fn fragment_of_another_record(encryption: Option<&SegmentEncryption>) -> V
     std::fs::read(fragment_path).unwrap()
 }
 
-/// Returns the key and path of the record's first fragment with nonce 0.
+/// Returns the key and path of the record's first fragment with collision index 0.
 async fn first_fragment(registry: &Registry<WriteLock>) -> (FragmentKey, PathBuf) {
     let fragment_key = FragmentKey {
         hashed_record_key: RecordPath::default()
@@ -377,7 +377,7 @@ async fn first_fragment(registry: &Registry<WriteLock>) -> (FragmentKey, PathBuf
         fragment_parameters: KdfUsageFragmentParameters {
             record_parameters: RecordParameters {
                 version: RecordVersion(0),
-                nonce: RecordNonce(0),
+                collision_index: CollisionIndex(0),
             },
             segment_index: 0.into(),
         },
@@ -414,12 +414,12 @@ async fn save_record_overwrite_keeps_colliding_fragments_of_other_records() {
             Some(_) => assert!(matches!(error, Error::Cipher(_)), "{error:?}"),
         }
 
-        // The previous record ends up under nonce 1, and so must the new one.
+        // The previous record ends up under collision index 1, and so must the new one.
         for data in [&b"previous record"[..], b"new record"] {
-            let nonce = save(&mut registry, data, 1, &[], encryption.as_ref(), true)
+            let collision_index = save(&mut registry, data, 1, &[], encryption.as_ref(), true)
                 .await
                 .unwrap();
-            assert_eq!(nonce, RecordNonce(1));
+            assert_eq!(collision_index, CollisionIndex(1));
             assert_eq!(load(&registry, 1).await, data);
             assert_eq!(std::fs::read(&colliding_path).unwrap(), colliding_file);
             assert_eq!(fragment_count(&registry_path), 2);
@@ -475,8 +475,8 @@ async fn save_record_failure_leaves_no_fragments() {
     );
     assert_eq!(fragment_count(&registry_path), 0);
 
-    // The save can be retried without overwriting, and without any further record nonces.
-    let nonce = save(
+    // The save can be retried without overwriting, and without any further collision indices.
+    let collision_index = save(
         &mut registry,
         &data,
         0,
@@ -486,6 +486,6 @@ async fn save_record_failure_leaves_no_fragments() {
     )
     .await
     .unwrap();
-    assert_eq!(nonce, RecordNonce(0));
+    assert_eq!(collision_index, CollisionIndex(0));
     assert_eq!(load(&registry, 0).await, data);
 }

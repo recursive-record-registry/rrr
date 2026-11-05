@@ -17,8 +17,8 @@ use proptest::prop_compose;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use segment::{
-    FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters, RecordNonce, RecordParameters,
-    RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
+    CollisionIndex, FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters,
+    RecordParameters, RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -247,7 +247,7 @@ pub struct RecordReadVersionSuccess {
     #[deref]
     #[deref_mut]
     pub record: Record,
-    pub record_nonce: RecordNonce,
+    pub collision_index: CollisionIndex,
     pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
@@ -255,7 +255,7 @@ pub struct RecordReadVersionSuccess {
 pub struct RecordListVersionsItem {
     pub record_metadata: RecordMetadata,
     pub record_version: RecordVersion,
-    pub record_nonce: RecordNonce,
+    pub collision_index: CollisionIndex,
     pub segments: Vec<RecordReadVersionSuccessSegment>,
 }
 
@@ -275,7 +275,7 @@ impl Record {
         registry: &'a Registry<L>,
         hash_record_path: &'a (impl HashRecordPath + Debug),
         record_version: RecordVersion,
-        record_nonce: RecordNonce,
+        collision_index: CollisionIndex,
     ) -> Result<impl Stream<Item = Result<Option<RecordReadSegment>>> + 'a>
     where
         L: FileLock,
@@ -283,7 +283,7 @@ impl Record {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let record_parameters = RecordParameters {
             version: record_version,
-            nonce: record_nonce,
+            collision_index,
         };
 
         #[derive(Default)]
@@ -336,13 +336,13 @@ impl Record {
         Ok(stream)
     }
 
-    /// Attempts to read a record with the specified record version and record nonce.
+    /// Attempts to read a record with the specified record version and collision index.
     #[instrument(level = Level::TRACE, ret, err)]
-    pub async fn read_version_with_nonce<L>(
+    pub async fn read_version_with_collision_index<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
-        record_nonce: RecordNonce,
+        collision_index: CollisionIndex,
     ) -> Result<Option<RecordReadVersionSuccess>>
     where
         L: FileLock,
@@ -350,7 +350,8 @@ impl Record {
         let mut data_buffer = Vec::<u8>::new();
         let mut segments = Vec::<RecordReadVersionSuccessSegment>::new();
         let stream =
-            Self::read_segments(registry, hash_record_path, record_version, record_nonce).await?;
+            Self::read_segments(registry, hash_record_path, record_version, collision_index)
+                .await?;
 
         pin_mut!(stream);
 
@@ -377,11 +378,11 @@ impl Record {
         let record = coset::cbor::from_reader::<Self, _>(Cursor::new(&data_buffer))
             .map_err(Error::CborDe)?;
 
-        info!(record_nonce = %*record_nonce, "Record read successfully");
+        info!(collision_index = %*collision_index, "Record read successfully");
 
         Ok(Some(RecordReadVersionSuccess {
             record,
-            record_nonce,
+            collision_index,
             segments,
         }))
     }
@@ -399,10 +400,14 @@ impl Record {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let mut errors = Vec::<Error>::new();
 
-        for record_nonce in (0..=max_collision_resolution_attempts).map(RecordNonce) {
-            let record_result =
-                Self::read_version_with_nonce(registry, &hashed_key, record_version, record_nonce)
-                    .await;
+        for collision_index in (0..=max_collision_resolution_attempts).map(CollisionIndex) {
+            let record_result = Self::read_version_with_collision_index(
+                registry,
+                &hashed_key,
+                record_version,
+                collision_index,
+            )
+            .await;
 
             match record_result {
                 Ok(Some(record)) => return Ok(Some(record)),
@@ -456,7 +461,7 @@ impl Record {
                         // TODO/FIXME: Currently reads the entire record, even though just the metadata would be sufficient.
                         record_metadata: record_success.record.metadata,
                         record_version,
-                        record_nonce: record_success.record_nonce,
+                        collision_index: record_success.collision_index,
                         segments: record_success.segments,
                     });
                     continue 'version_loop;
@@ -472,7 +477,7 @@ impl Record {
     }
 
     /// Removes the fragments of the record with the specified record version, saved under any
-    /// record nonce up to `max_collision_resolution_attempts`.
+    /// collision index up to `max_collision_resolution_attempts`.
     ///
     /// Only fragments that can be read with the record's key are removed, so fragments of other
     /// records whose names collide with this record's fragments are kept.
@@ -486,9 +491,9 @@ impl Record {
     ) -> Result<()> {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
 
-        for record_nonce in (0..=max_collision_resolution_attempts).map(RecordNonce) {
+        for collision_index in (0..=max_collision_resolution_attempts).map(CollisionIndex) {
             let stream =
-                Self::read_segments(registry, &hashed_key, record_version, record_nonce).await?;
+                Self::read_segments(registry, &hashed_key, record_version, collision_index).await?;
 
             pin_mut!(stream);
 
@@ -499,7 +504,7 @@ impl Record {
                     // A missing segment ends the record.
                     Ok(None) => break,
                     // The file is a fragment of another record, unencrypted or encrypted with
-                    // another key, respectively. Like readers, skip to the next nonce.
+                    // another key, respectively. Like readers, skip to the next collision index.
                     Err(Error::FileTagMismatch | Error::Cipher(_)) => break,
                     // Failed saves leave no fragments behind, so any other error means that the
                     // registry is damaged, or that the record could not be checked.
@@ -529,7 +534,7 @@ impl Record {
         split_at: &[usize], // TODO: Should be generated from the serialized record length.
         encryption: Option<&SegmentEncryption>,
         open_options: &OpenOptions,
-    ) -> Result<RecordNonce> {
+    ) -> Result<CollisionIndex> {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let mut data_buffer = Vec::<u8>::new();
         coset::cbor::into_writer(&self, &mut data_buffer).map_err(Error::CborSer)?;
@@ -561,20 +566,21 @@ impl Record {
             segment_sizes
         };
 
-        // Find a record nonce such that no record fragment file names collide with existing files.
+        // Find a collision index such that no record fragment file names collide with existing
+        // files.
         #[allow(clippy::never_loop)]
-        let (record_nonce, fragments) = 'collision_resolution_loop: loop {
+        let (collision_index, fragments) = 'collision_resolution_loop: loop {
             let mut fragments = Vec::with_capacity(segment_sizes.len());
 
-            'next_nonce: for record_nonce in
+            'next_collision_index: for collision_index in
                 0..max_collision_resolution_attempts.checked_add(1).unwrap()
             {
-                trace!(%record_nonce, "Checking collisions");
+                trace!(%collision_index, "Checking collisions");
                 fragments.clear();
 
                 let record_parameters = RecordParameters {
                     version: record_version,
-                    nonce: record_nonce.into(),
+                    collision_index: collision_index.into(),
                 };
 
                 for segment_index in 0..segment_sizes.len() {
@@ -601,19 +607,22 @@ impl Record {
 
                     if collides_with_existing_fragment {
                         // TODO: Check whether the colliding file has the same fragment file tag?
-                        continue 'next_nonce;
+                        continue 'next_collision_index;
                     }
 
                     fragments.push((fragment_key, fragment_path));
                 }
 
-                break 'collision_resolution_loop (record_parameters.nonce, fragments);
+                break 'collision_resolution_loop (record_parameters.collision_index, fragments);
             }
 
             return Err(Error::CollisionResolutionFailed);
         };
 
-        debug!(?record_nonce, "Record nonce without any collisions found");
+        debug!(
+            ?collision_index,
+            "Collision index without any collisions found"
+        );
         assert_eq!(fragments.len(), segment_sizes.len());
 
         let mut rest = data_buffer.as_slice();
@@ -682,9 +691,9 @@ impl Record {
             return Err(error);
         }
 
-        info!(?record_nonce, "Record written successfully");
+        info!(?collision_index, "Record written successfully");
 
-        Ok(record_nonce)
+        Ok(collision_index)
     }
 }
 
