@@ -1,6 +1,6 @@
 use crate::utils::serde::{BytesOrHexString, Secret};
 use proptest::{
-    arbitrary::{any, Arbitrary},
+    arbitrary::{Arbitrary, any},
     prop_compose,
     strategy::{BoxedStrategy, Just, Strategy},
 };
@@ -44,11 +44,12 @@ pub struct Argon2Params {
 
 impl Default for Argon2Params {
     fn default() -> Self {
+        // The "first recommended option" from RFC 9106.
         Self {
             variant: Variant::Argon2id,
-            m_cost: 1 << 10, // 1 MiB
-            t_cost: 1 << 10,
-            p_cost: 1,
+            m_cost: 2 << 20, // 2 GiB
+            t_cost: 1,       // 1 iteration
+            p_cost: 4,       // 4 lanes
             pepper: None,
         }
     }
