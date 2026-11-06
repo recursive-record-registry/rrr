@@ -662,12 +662,18 @@ impl Record {
                     )
                     .await?;
 
-                if cfg!(debug_assertions) {
+                // The fragment file is only opened with read access in debug builds,
+                // see `Registry::save_record`.
+                if cfg!(debug_assertions) && tracing::enabled!(Level::TRACE) {
                     let mut buf = Vec::new();
 
                     fragment_file_guard.rewind().await?;
                     fragment_file_guard.read_to_end(&mut buf).await?;
-                    println!("{:?}:\n{:02x}", fragment_path, buf.iter().format(""));
+                    trace!(
+                        ?fragment_path,
+                        fragment_bytes = %format_args!("{:02x}", buf.iter().format("")),
+                        "Fragment written"
+                    );
                 }
             }
 
