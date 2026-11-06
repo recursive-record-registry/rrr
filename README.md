@@ -9,8 +9,19 @@ This repository contains a basic command-line tool for reading Recursive Record 
 A specification for the secure storage of digital information in a tree structure, where each subtree is password-protected.
 Without knowing the passwords (and thus being able to browse the registry), the structure and the contents of the tree is unknown to the user.
 The intention is for the registry to be distributed with 3rd parties.
-The specification guarantees integrity, authentication, and non-repudiation of the stored records, from the author of the registry.
+The specification guarantees integrity, authentication, and non-repudiation of the stored records, from the author of the registry, provided that the reader trusts the registry's `registry.cbor` file (see [Trust model](#trust-model)).
 The aim of this project is to provide an interesting platform for storytelling and the creation of puzzles.
+
+### Trust model
+The `registry.cbor` file is the trust anchor of a registry.
+It contains the verifying keys of the registry's author, as well as the parameters needed to locate and decrypt records.
+The record fragments in the `records` directory may be obtained from anyone, because each fragment is verified against the keys in `registry.cbor`.
+The `registry.cbor` file itself is not signed, so it must be obtained from the author, or from a source that the reader trusts to have left it unmodified.
+Whoever can replace it can substitute their own keys, and then replace or re-sign any record.
+If `registry.cbor` lists no verifying keys, record fragments are not authenticated at all.
+
+A trusted `registry.cbor` does not protect against omission: whoever distributes the record fragments can withhold some of them, or withhold newer versions of records.
+Readers then see an older version of a record, or an incomplete one, and the signatures cannot detect this.
 
 ## Compiling the executable binary
 1. Install Rust via [rustup.rs](https://rustup.rs/)
