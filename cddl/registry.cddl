@@ -35,6 +35,8 @@ RRR_HashingAlgorithm_Argon2 = (
         ; Degree of parallelism. Between 1 and (2^24)-1.
         ; p_cost: 1...16777216, ; Bug in cddl-rs' exclusive ranges
         p_cost: 1..16777215,
+        ; Passed to Argon2 as its secret input (`K` in RFC 9106). Not secret: it is part of the
+        ; public registry config, so that anyone with the config can derive the correct keys.
         ? pepper: bstr / nil,
     },
 )

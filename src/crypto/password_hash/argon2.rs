@@ -39,6 +39,11 @@ pub struct Argon2Params {
     /// Degree of parallelism. Between 1 and (2^24)-1.
     #[zeroize(skip)]
     pub p_cost: u32,
+    /// Optional bytes passed to Argon2 as its secret input (`K` in RFC 9106).
+    ///
+    /// Despite the name, the pepper is **not secret**. It is part of the public registry config
+    /// (`registry.cbor`), so that anyone who has the config can derive the correct keys.
+    /// It acts as an additional, registry-wide salt, not as a confidential key.
     pub pepper: Option<Secret<BytesOrHexString<Vec<u8>>>>,
 }
 

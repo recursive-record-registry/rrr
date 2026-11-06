@@ -38,6 +38,10 @@ use tokio::{
 use tokio_util::io::SyncIoBridge;
 use tracing::instrument;
 
+/// Recommended length of the Argon2 pepper.
+/// The pepper is part of the public registry config, see [`Argon2Params::pepper`].
+///
+/// [`Argon2Params::pepper`]: crate::crypto::password_hash::argon2::Argon2Params::pepper
 pub const BYTES_HASH_PEPPER_RECOMMENDED: usize = 32;
 
 pub trait ConfigParamTrait {
