@@ -6,10 +6,10 @@ use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
 use crate::registry::{Registry, RegistryConfigKdf};
+use crate::utils::blocking_io::encode_blocking;
 use crate::utils::fd_lock::FileLock;
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::LockRead;
-use async_scoped::TokioScope;
 use coset::cbor::tag;
 use coset::TaggedCborSerializable;
 use coset::{
@@ -29,7 +29,6 @@ use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite};
-use tokio_util::io::SyncIoBridge;
 use tracing::{instrument, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -607,22 +606,10 @@ impl Segment {
         let output_value = cbor::Value::Tag(TAG_SELF_DESCRIBED_CBOR, Box::new(output_value));
 
         // Write the result to the output.
-        let sync_write = SyncIoBridge::new(write);
-        let ((), results) = unsafe {
-            TokioScope::scope_and_collect(move |scope| {
-                scope.spawn_blocking(move || -> Result<()> {
-                    coset::cbor::into_writer(&output_value, sync_write).map_err(Error::CborSer)?;
-                    Ok(())
-                })
-            })
-        }
-        .await;
-
-        for result in results {
-            result??;
-        }
-
-        Ok(())
+        encode_blocking(write, move |pipe| {
+            coset::cbor::into_writer(&output_value, pipe).map_err(Error::CborSer)
+        })
+        .await
     }
 }
 

@@ -9,10 +9,10 @@ use crate::record::segment::{
 use crate::record::{
     HashRecordPath, Record, RecordListVersionsItem, RecordReadVersionSuccess, SuccessionNonce,
 };
+use crate::utils::blocking_io::{decode_blocking, encode_blocking};
 use crate::utils::fd_lock::{FileLock, ReadLock, WriteLock};
 use crate::utils::fs::replace_file;
 use crate::utils::serde::{BytesOrHexString, Secret};
-use async_scoped::TokioScope;
 use casey::pascal;
 use coset::{CoseKey, cbor::tag};
 use derive_more::{Deref, DerefMut};
@@ -35,7 +35,6 @@ use tokio::{
     fs::File,
     io::{AsyncRead, AsyncWrite},
 };
-use tokio_util::io::SyncIoBridge;
 use tracing::instrument;
 
 /// Recommended length of the Argon2 pepper.
@@ -466,37 +465,19 @@ impl<'de> Deserialize<'de> for RegistryConfig {
 impl RegistryConfig {
     pub async fn write(&self, write: impl AsyncWrite + Unpin + Send) -> Result<()> {
         let self_cloned = self.clone();
-        let sync_write = SyncIoBridge::new(write);
-        let ((), results) = unsafe {
-            TokioScope::scope_and_collect(move |scope| {
-                scope.spawn_blocking(move || -> Result<()> {
-                    coset::cbor::into_writer(&self_cloned, sync_write).map_err(Error::CborSer)?;
-                    Ok(())
-                })
-            })
-        }
-        .await;
-        for result in results {
-            result??;
-        }
-        Ok(())
+
+        encode_blocking(write, move |pipe| {
+            coset::cbor::into_writer(&self_cloned, pipe).map_err(Error::CborSer)
+        })
+        .await
     }
 
+    /// Reads a registry config from `read`, which may be read past the end of the config.
     pub async fn read(read: impl AsyncRead + Unpin + Send) -> Result<Self> {
-        let sync_read = SyncIoBridge::new(read);
-        let ((), results) = unsafe {
-            TokioScope::scope_and_collect(move |scope| {
-                scope.spawn_blocking(move || -> Result<Self> {
-                    let config =
-                        coset::cbor::from_reader::<Self, _>(sync_read).map_err(Error::CborDe)?;
-                    Ok(config)
-                })
-            })
-        }
-        .await;
-        let [result] = results.try_into().unwrap();
-        let config = result??;
-        Ok(config)
+        decode_blocking(read, |pipe| {
+            coset::cbor::from_reader::<Self, _>(pipe).map_err(Error::CborDe)
+        })
+        .await
     }
 }
 
