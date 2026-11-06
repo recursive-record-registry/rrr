@@ -71,9 +71,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"], optional =
 # changes.
 cddl = "0.9.5"
 criterion = { version = "0.8.2", features = ["async_tokio"] }
-criterion-macro = "0.4.0"
 tempfile = "3.27"
 tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
 
 [[bench]]
 name = "benches"
+harness = false

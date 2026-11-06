@@ -93,14 +93,6 @@ impl DecodePrivateKey for SigningKey {
     }
 }
 
-impl FnOnce<(&[u8],)> for &'_ SigningKey {
-    type Output = Result<Vec<u8>>;
-
-    extern "rust-call" fn call_once(self, (plaintext,): (&[u8],)) -> Self::Output {
-        self.try_sign(plaintext)
-    }
-}
-
 // impl Serialize for SigningKey {
 //     fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
 //     where
@@ -209,14 +201,6 @@ impl VerifyingKey {
                 Ok(())
             }
         }
-    }
-}
-
-impl FnOnce<(&[u8], &[u8])> for &'_ VerifyingKey {
-    type Output = std::result::Result<(), SignatureMismatch>;
-
-    extern "rust-call" fn call_once(self, (signature, tbs_data): (&[u8], &[u8])) -> Self::Output {
-        self.try_verify(signature, tbs_data)
     }
 }
 

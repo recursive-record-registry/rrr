@@ -66,55 +66,49 @@ impl From<EncryptionAlgorithm> for coset::Algorithm {
     }
 }
 
-pub(crate) struct Encrypt<'a> {
-    pub algorithm: &'a EncryptionAlgorithm,
-    pub key: &'a FragmentEncryptionKeyBytes,
-}
-
-impl FnOnce<(&[u8], &[u8])> for Encrypt<'_> {
-    type Output = std::result::Result<Vec<u8>, aes_gcm_siv::Error>;
-
-    extern "rust-call" fn call_once(self, (plaintext, aad): (&[u8], &[u8])) -> Self::Output {
-        match self.algorithm {
-            EncryptionAlgorithm::Aes256GcmSiv => {
-                let key: [u8; 32] = self.key.deref().try_into().unwrap();
-                Aes256GcmSiv::new(&key.into()).encrypt(
-                    // The nonce is intentionally 0.
-                    // Each `FragmentKey` derives its own encryption key, so a key is only reused
-                    // when the same fragment is written again, such as when a published record
-                    // version is overwritten. AES-GCM-SIV derives the IV from the plaintext, so
-                    // this only reveals whether the two plaintexts are equal.
-                    &Default::default(),
-                    Payload {
-                        msg: plaintext,
-                        aad,
-                    },
-                )
-            }
+/// Encrypts `plaintext` with the given algorithm and key, authenticating `aad`.
+pub(crate) fn encrypt(
+    algorithm: &EncryptionAlgorithm,
+    key: &FragmentEncryptionKeyBytes,
+    plaintext: &[u8],
+    aad: &[u8],
+) -> std::result::Result<Vec<u8>, aes_gcm_siv::Error> {
+    match algorithm {
+        EncryptionAlgorithm::Aes256GcmSiv => {
+            let key: [u8; 32] = key.deref().try_into().unwrap();
+            Aes256GcmSiv::new(&key.into()).encrypt(
+                // The nonce is intentionally 0.
+                // Each `FragmentKey` derives its own encryption key, so a key is only reused
+                // when the same fragment is written again, such as when a published record
+                // version is overwritten. AES-GCM-SIV derives the IV from the plaintext, so
+                // this only reveals whether the two plaintexts are equal.
+                &Default::default(),
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
         }
     }
 }
 
-pub(crate) struct Decrypt<'a> {
-    pub algorithm: &'a EncryptionAlgorithm,
-    pub key: &'a FragmentEncryptionKeyBytes,
-}
-
-impl FnOnce<(&[u8], &[u8])> for Decrypt<'_> {
-    type Output = std::result::Result<Vec<u8>, aes_gcm_siv::Error>;
-
-    extern "rust-call" fn call_once(self, (ciphertext, aad): (&[u8], &[u8])) -> Self::Output {
-        match self.algorithm {
-            EncryptionAlgorithm::Aes256GcmSiv => {
-                let key: [u8; 32] = self.key.deref().try_into().unwrap();
-                Aes256GcmSiv::new(&key.into()).decrypt(
-                    &Default::default(),
-                    Payload {
-                        msg: ciphertext,
-                        aad,
-                    },
-                )
-            }
+/// Decrypts `ciphertext` with the given algorithm and key, verifying `aad`.
+pub(crate) fn decrypt(
+    algorithm: &EncryptionAlgorithm,
+    key: &FragmentEncryptionKeyBytes,
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> std::result::Result<Vec<u8>, aes_gcm_siv::Error> {
+    match algorithm {
+        EncryptionAlgorithm::Aes256GcmSiv => {
+            let key: [u8; 32] = key.deref().try_into().unwrap();
+            Aes256GcmSiv::new(&key.into()).decrypt(
+                &Default::default(),
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
         }
     }
 }

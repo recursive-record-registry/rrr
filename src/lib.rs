@@ -1,5 +1,3 @@
-#![feature(fn_traits)]
-#![feature(unboxed_closures)]
 
 use coset::cbor::cbor;
 

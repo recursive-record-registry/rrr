@@ -17,8 +17,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - name: Install nightly toolchain
-      uses: dtolnay/rust-toolchain@nightly
+    - name: Install stable toolchain
+      uses: dtolnay/rust-toolchain@stable
     - name: Build library
       run: cargo build --release
     - name: Build executable binary

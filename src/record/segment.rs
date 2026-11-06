@@ -1,7 +1,7 @@
 use crate::cbor::{
     self, HasHeadersExt, TAG_RRR_FRAGMENT, TAG_RRR_SEGMENT, TAG_SELF_DESCRIBED_CBOR,
 };
-use crate::crypto::encryption::{Decrypt, Encrypt, EncryptionAlgorithm};
+use crate::crypto::encryption::{self, EncryptionAlgorithm};
 use crate::crypto::signature::{SigningKey, VerifyingKey};
 use crate::error::{Error, Result};
 use crate::record::{HashedRecordKey, RecordKey};
@@ -394,7 +394,9 @@ impl Segment {
                 for verifying_key in verifying_keys {
                     let verified = (0..signed.signatures.len()).any(|signature_index| {
                         signed
-                            .verify_signature(signature_index, &[], verifying_key)
+                            .verify_signature(signature_index, &[], |signature, data| {
+                                verifying_key.try_verify(signature, data)
+                            })
                             .is_ok()
                     });
 
@@ -442,14 +444,13 @@ impl Segment {
                 let encryption_key = fragment_key
                     .derive_encryption_key(kdf_params, &encryption_algorithm)
                     .await?;
-                let decrypt = Decrypt {
-                    algorithm: &encryption_algorithm,
-                    key: &encryption_key,
-                };
                 let plaintext = encrypted.decrypt_ciphertext(
                     &[],
                     || Error::MalformedFragment,
-                    |ciphertext, aad| decrypt(ciphertext, aad).map_err(Error::from),
+                    |ciphertext, aad| {
+                        encryption::decrypt(&encryption_algorithm, &encryption_key, ciphertext, aad)
+                            .map_err(Error::from)
+                    },
                 )?;
 
                 let mut plaintext_cursor = Cursor::new(plaintext.as_slice());
@@ -559,9 +560,8 @@ impl Segment {
                 .try_create_ciphertext(
                     &plaintext,
                     &[],
-                    Encrypt {
-                        algorithm: &encryption.algorithm,
-                        key: &encryption_key,
+                    |plaintext, aad| {
+                        encryption::encrypt(&encryption.algorithm, &encryption_key, plaintext, aad)
                     },
                 )?
                 .build();
@@ -588,7 +588,7 @@ impl Segment {
                         )
                         .build(),
                     &[],
-                    signing_key,
+                    |data| signing_key.try_sign(data),
                 )?;
             }
             let signed = builder.build();

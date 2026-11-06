@@ -1,8 +1,4 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(criterion::runner)]
-
-use criterion::Criterion;
-use criterion_macro::criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use rrr::{
     crypto::{
         kdf::{
@@ -20,7 +16,6 @@ fn with_samples(samples: usize) -> Criterion {
     Criterion::default().sample_size(samples)
 }
 
-#[criterion(with_samples(10))]
 fn bench_hash_params(c: &mut Criterion) {
     let hash = RegistryConfigHash {
         algorithm: PasswordHashAlgorithm::Argon2(Argon2Params::default()),
@@ -44,3 +39,10 @@ fn bench_hash_params(c: &mut Criterion) {
             .iter(|| async { key.hash(&hash).await.unwrap() })
     });
 }
+
+criterion_group! {
+    name = benches;
+    config = with_samples(10);
+    targets = bench_hash_params
+}
+criterion_main!(benches);
