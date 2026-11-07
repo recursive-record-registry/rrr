@@ -4,7 +4,7 @@ use prop::collection::vec;
 use proptest::prelude::*;
 use rrr::error::Error;
 use rrr::record::segment::{CollisionIndex, RecordVersion, SegmentEncryption};
-use rrr::record::{RecordName, SuccessionNonce};
+use rrr::record::{LoadRecordOptions, RecordName, SaveRecordOptions, SuccessionNonce};
 use rrr::utils::fd_lock::FileLock;
 use rrr::utils::serde::BytesOrHexString;
 use rrr::{
@@ -153,14 +153,13 @@ async fn prop_registry(
         loop {
             let result = registry
                 .save_record(
-                    &signing_keys,
                     hashed_record_key,
                     record,
                     *record_version,
-                    max_collision_resolution_attempts,
-                    &[], // TODO
-                    encryption.as_ref(), // TODO
-                    false,
+                    SaveRecordOptions {
+                        max_collision_resolution_attempts,
+                        ..SaveRecordOptions::new(&signing_keys, encryption.as_ref())
+                    },
                 )
                 .await;
 
@@ -202,7 +201,9 @@ async fn prop_registry(
                     .load_record(
                         hashed_record_key,
                         *record_version,
-                        *collision_index - 1,
+                        LoadRecordOptions {
+                            max_collision_resolution_attempts: *collision_index - 1,
+                        },
                     )
                     .await;
                 dbg!(&result);
@@ -215,7 +216,9 @@ async fn prop_registry(
                 .load_record(
                     hashed_record_key,
                     *record_version,
-                    *collision_index,
+                    LoadRecordOptions {
+                        max_collision_resolution_attempts: *collision_index,
+                    },
                 )
                 .await
                 .unwrap()

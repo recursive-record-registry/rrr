@@ -1,13 +1,12 @@
 use crate::cbor::{TAG_RRR_REGISTRY, TAG_SELF_DESCRIBED_CBOR};
 use crate::crypto::kdf::KdfAlgorithm;
 use crate::crypto::password_hash::PasswordHashAlgorithm;
-use crate::crypto::signature::{SigningKey, VerifyingKey};
+use crate::crypto::signature::VerifyingKey;
 use crate::error::{Error, InvalidParameterError, OptionExt, Result};
-use crate::record::segment::{
-    CollisionIndex, FragmentFileNameBytes, RecordVersion, SegmentEncryption,
-};
+use crate::record::segment::{CollisionIndex, FragmentFileNameBytes, RecordVersion};
 use crate::record::{
-    HashRecordPath, Record, RecordListVersionsItem, RecordReadVersionSuccess, SuccessionNonce,
+    HashRecordPath, ListRecordVersionsOptions, LoadRecordOptions, Record, RecordListVersionsItem,
+    RecordReadVersionSuccess, SaveRecordOptions, SuccessionNonce,
 };
 use crate::utils::blocking_io::{decode_blocking, encode_blocking};
 use crate::utils::fd_lock::{FileLock, ReadLock, WriteLock};
@@ -569,34 +568,30 @@ impl<L: FileLock> Registry<L> {
         path
     }
 
+    /// Loads the version `record_version` of the record at `hash_record_path`, or returns `None`
+    /// if it is not found.
+    ///
+    /// Use [`LoadRecordOptions::default()`] unless the record was saved with non-default options.
     pub async fn load_record(
         &self,
         hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
-        max_collision_resolution_attempts: u64,
+        options: LoadRecordOptions,
     ) -> Result<Option<RecordReadVersionSuccess>> {
-        Record::read_version(
-            self,
-            hash_record_path,
-            record_version,
-            max_collision_resolution_attempts,
-        )
-        .await
+        Record::read_version(self, hash_record_path, record_version, options).await
     }
 
+    /// Returns the versions of the record at `hash_record_path`, sorted from least to most
+    /// recent.
+    ///
+    /// Use [`ListRecordVersionsOptions::default()`] unless the record was saved with non-default
+    /// options.
     pub async fn list_record_versions(
         &self,
         hash_record_path: &(impl HashRecordPath + Debug),
-        max_version_lookahead: u64,
-        max_collision_resolution_attempts: u64,
+        options: ListRecordVersionsOptions,
     ) -> Result<Vec<RecordListVersionsItem>> {
-        Record::list_versions(
-            self,
-            hash_record_path,
-            max_version_lookahead,
-            max_collision_resolution_attempts,
-        )
-        .await
+        Record::list_versions(self, hash_record_path, options).await
     }
 }
 
@@ -678,10 +673,11 @@ impl Registry<WriteLock> {
     /// Saves `record` as the version `record_version` of the record at `hash_record_path`, and
     /// returns the collision index chosen to avoid file name collisions.
     ///
-    /// If `overwrite` is `true`, any record already saved with this version, under any collision
-    /// index up to `max_collision_resolution_attempts`, is removed first. Fragments of other
-    /// records, whose file names collide with this record's, are kept. Any other file found in
-    /// place of one of the record's fragments is reported as an error.
+    /// If [`SaveRecordOptions::overwrite`] is `true`, any record already saved with this version,
+    /// under any collision index up to [`SaveRecordOptions::max_collision_resolution_attempts`],
+    /// is removed first. Fragments of other records, whose file names collide with this record's,
+    /// are kept. Any other file found in place of one of the record's fragments is reported as an
+    /// error.
     /// Overwriting a version that has already been published reuses its encryption keys, which
     /// reveals to readers holding both copies whether the contents changed; publish a new version
     /// instead. See [`RecordVersion`].
@@ -689,51 +685,13 @@ impl Registry<WriteLock> {
     /// If saving fails, the fragments created by this call are removed.
     pub async fn save_record(
         &mut self,
-        signing_keys: &[SigningKey],
         hash_record_path: &(impl HashRecordPath + Debug),
         record: &Record,
         record_version: RecordVersion,
-        max_collision_resolution_attempts: u64,
-        split_at: &[usize],
-        encryption: Option<&SegmentEncryption>,
-        overwrite: bool,
+        options: SaveRecordOptions<'_>,
     ) -> Result<CollisionIndex> {
-        let hashed_record_key = hash_record_path.hash_record_path(self).await?;
-
-        // Readers use the lowest collision index under which the record can be read, so the new
-        // record would not be found if the previous one were left under a lower collision index.
-        // The previous record's fragments would also be treated as file name collisions.
-        if overwrite {
-            Record::remove_version(
-                self,
-                &hashed_record_key,
-                record_version,
-                max_collision_resolution_attempts,
-            )
-            .await?;
-        }
-
-        let open_options = {
-            let mut open_options = tokio::fs::OpenOptions::new();
-            open_options.create_new(!overwrite);
-            open_options.create(overwrite);
-            open_options.truncate(true);
-            open_options.write(true);
-            open_options.read(cfg!(debug_assertions));
-            open_options
-        };
-
         record
-            .write_version(
-                signing_keys,
-                self,
-                &hashed_record_key,
-                record_version,
-                max_collision_resolution_attempts,
-                split_at,
-                encryption,
-                &open_options,
-            )
+            .write_version(self, hash_record_path, record_version, options)
             .await
     }
 

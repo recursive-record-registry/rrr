@@ -3,7 +3,9 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     cbor::SerializeExt,
     record::{
-        segment::RecordVersion, HashRecordPath, HashedRecordKey, RecordKey, RecordName, RecordPath,
+        DEFAULT_MAX_COLLISION_RESOLUTION_ATTEMPTS, DEFAULT_MAX_VERSION_LOOKAHEAD, HashRecordPath,
+        HashedRecordKey, ListRecordVersionsOptions, LoadRecordOptions, RecordKey, RecordName,
+        RecordPath, segment::RecordVersion,
     },
     registry::Registry,
     utils::fd_lock::FileLock,
@@ -80,7 +82,7 @@ pub struct RrrArgsRecordMaxVersionLookahead {
     /// For example, when this is set to '1', and the record versions 0, 1, 3, 5, 8 are stored in
     /// the registry, the version 5 would be considered the latest (the search begins at record
     /// version 0).
-    #[arg(short('l'), long, default_value = "10")]
+    #[arg(short('l'), long, default_value_t = DEFAULT_MAX_VERSION_LOOKAHEAD)]
     #[deref]
     max_version_lookahead: u64,
 }
@@ -111,8 +113,10 @@ impl RrrArgsRecordVersion {
             let versions = registry
                 .list_record_versions(
                     hash_record_path,
-                    *self.max_version_lookahead,
-                    max_collision_resolution_attempts,
+                    ListRecordVersionsOptions {
+                        max_version_lookahead: *self.max_version_lookahead,
+                        max_collision_resolution_attempts,
+                    },
                 )
                 .await?;
 
@@ -125,9 +129,9 @@ impl RrrArgsRecordVersion {
 pub struct RrrArgsRecordPath {
     /// How many attempts should be performed to resolve file name collisions.
     /// A higher value may be necessary for registries with short fragment file names.
-    /// The default value of 4 is conservative for registries with fragment file names
+    /// The default value is conservative for registries with fragment file names
     /// of recommended length, it is perhaps even excessive.
-    #[arg(short('c'), long, value_enum, default_value = "4")]
+    #[arg(short('c'), long, default_value_t = DEFAULT_MAX_COLLISION_RESOLUTION_ATTEMPTS)]
     pub max_collision_resolution_attempts: u64,
     /// The format in which record names are specified.
     #[arg(short('f'), long, value_enum, default_value_t = Default::default())]
@@ -248,8 +252,11 @@ impl RrrArgs {
                     let versions = registry
                         .list_record_versions(
                             &hashed_record_key,
-                            *max_version_lookahead_args,
-                            record_path_args.max_collision_resolution_attempts,
+                            ListRecordVersionsOptions {
+                                max_version_lookahead: *max_version_lookahead_args,
+                                max_collision_resolution_attempts: record_path_args
+                                    .max_collision_resolution_attempts,
+                            },
                         )
                         .await?;
 
@@ -296,7 +303,10 @@ impl RrrArgs {
                         .load_record(
                             &hashed_record_key,
                             record_version,
-                            record_path_args.max_collision_resolution_attempts,
+                            LoadRecordOptions {
+                                max_collision_resolution_attempts: record_path_args
+                                    .max_collision_resolution_attempts,
+                            },
                         )
                         .await?
                         .ok_or_else(|| eyre!("record not found: {record_path}"))?;
@@ -357,7 +367,10 @@ impl RrrArgs {
                         .load_record(
                             &hashed_record_key,
                             record_version,
-                            record_path_args.max_collision_resolution_attempts,
+                            LoadRecordOptions {
+                                max_collision_resolution_attempts: record_path_args
+                                    .max_collision_resolution_attempts,
+                            },
                         )
                         .await?
                         .ok_or_else(|| eyre!("record not found: {record_path}"))?;

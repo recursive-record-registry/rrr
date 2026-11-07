@@ -1,6 +1,5 @@
 use crate::cbor::{self, TAG_RRR_RECORD};
 use crate::crypto::encryption::EncryptionAlgorithm;
-use crate::crypto::signature::SigningKey;
 use crate::error::{Error, IoResultExt, Result};
 use crate::registry::Registry;
 use crate::utils::fd_lock::{FileLock, WriteLock};
@@ -22,7 +21,7 @@ use proptest::{
 };
 use segment::{
     CollisionIndex, FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters,
-    RecordParameters, RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
+    RecordParameters, RecordVersion, Segment, SegmentMetadata,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -37,9 +36,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 pub mod segment;
 
 mod key;
+mod options;
 mod path;
 
 pub use key::*;
+pub use options::*;
 pub use path::*;
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop, Serialize, Deserialize)]
@@ -395,12 +396,13 @@ impl Record {
         }))
     }
 
+    /// See [`Registry::load_record`].
     #[instrument(level = Level::TRACE, ret, err)]
     pub async fn read_version<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
-        max_collision_resolution_attempts: u64,
+        options: LoadRecordOptions,
     ) -> Result<Option<RecordReadVersionSuccess>>
     where
         L: FileLock,
@@ -408,7 +410,7 @@ impl Record {
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let mut errors = Vec::<Error>::new();
 
-        for collision_index in (0..=max_collision_resolution_attempts).map(CollisionIndex) {
+        for collision_index in (0..=options.max_collision_resolution_attempts).map(CollisionIndex) {
             let record_result = Self::read_version_with_collision_index(
                 registry,
                 &hashed_key,
@@ -439,8 +441,7 @@ impl Record {
     pub async fn list_versions<L>(
         registry: &Registry<L>,
         hash_record_path: &(impl HashRecordPath + Debug),
-        max_version_lookahead: u64,
-        max_collision_resolution_attempts: u64,
+        options: ListRecordVersionsOptions,
     ) -> Result<Vec<RecordListVersionsItem>>
     where
         L: FileLock,
@@ -454,15 +455,11 @@ impl Record {
                 .map(|item| RecordVersion(*item.record_version + 1))
                 .unwrap_or(RecordVersion(0));
 
-            'version_lookahead_loop: for version_lookahead in 0..=max_version_lookahead {
+            'version_lookahead_loop: for version_lookahead in 0..=options.max_version_lookahead {
                 let record_version = RecordVersion(version_lookahead_start.0 + version_lookahead);
-                let record_success = Self::read_version(
-                    registry,
-                    &hashed_key,
-                    record_version,
-                    max_collision_resolution_attempts,
-                )
-                .await?;
+                let record_success =
+                    Self::read_version(registry, &hashed_key, record_version, options.into())
+                        .await?;
 
                 if let Some(record_success) = record_success {
                     versions.push(RecordListVersionsItem {
@@ -531,18 +528,22 @@ impl Record {
         Ok(())
     }
 
+    /// See [`Registry::save_record`].
     #[instrument(level = Level::TRACE, ret, err)]
     pub async fn write_version(
         &self,
-        signing_keys: &[SigningKey],
         registry: &Registry<WriteLock>,
         hash_record_path: &(impl HashRecordPath + Debug),
         record_version: RecordVersion,
-        max_collision_resolution_attempts: u64,
-        split_at: &[usize], // TODO: Should be generated from the serialized record length.
-        encryption: Option<&SegmentEncryption>,
-        open_options: &OpenOptions,
+        options: SaveRecordOptions<'_>,
     ) -> Result<CollisionIndex> {
+        let SaveRecordOptions {
+            signing_keys,
+            encryption,
+            split_at, // TODO: Should be generated from the serialized record length.
+            max_collision_resolution_attempts,
+            overwrite,
+        } = options;
         let hashed_key = hash_record_path.hash_record_path(registry).await?;
         let mut data_buffer = Vec::<u8>::new();
         coset::cbor::into_writer(&self, &mut data_buffer).map_err(Error::CborSer)?;
@@ -572,6 +573,29 @@ impl Record {
             }
 
             segment_sizes
+        };
+
+        // Readers use the lowest collision index under which the record can be read, so the new
+        // record would not be found if the previous one were left under a lower collision index.
+        // The previous record's fragments would also be treated as file name collisions.
+        if overwrite {
+            Self::remove_version(
+                registry,
+                &hashed_key,
+                record_version,
+                max_collision_resolution_attempts,
+            )
+            .await?;
+        }
+
+        let open_options = {
+            let mut open_options = OpenOptions::new();
+            open_options.create_new(!overwrite);
+            open_options.create(overwrite);
+            open_options.truncate(true);
+            open_options.write(true);
+            open_options.read(cfg!(debug_assertions));
+            open_options
         };
 
         // Find a collision index such that no record fragment file names collide with existing
@@ -671,7 +695,7 @@ impl Record {
                     .await?;
 
                 // The fragment file is only opened with read access in debug builds,
-                // see `Registry::save_record`.
+                // see `open_options` above.
                 if cfg!(debug_assertions) && tracing::enabled!(Level::TRACE) {
                     let mut buf = Vec::new();
 

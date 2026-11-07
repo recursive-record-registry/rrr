@@ -8,7 +8,7 @@ use rrr::{
     },
     error::Error,
     record::{
-        HashRecordPath, Record, RecordPath,
+        HashRecordPath, LoadRecordOptions, Record, RecordPath, SaveRecordOptions,
         segment::{
             CollisionIndex, FragmentKey, KdfUsageFragmentParameters, RecordParameters,
             RecordVersion, Segment, SegmentEncryption,
@@ -262,14 +262,15 @@ async fn save(
 ) -> rrr::error::Result<CollisionIndex> {
     registry
         .save_record(
-            &[],
             &RecordPath::default(),
             &record(data),
             RecordVersion(0),
-            max_collision_resolution_attempts,
-            split_at,
-            encryption,
-            overwrite,
+            SaveRecordOptions {
+                split_at,
+                max_collision_resolution_attempts,
+                overwrite,
+                ..SaveRecordOptions::new(&[], encryption)
+            },
         )
         .await
 }
@@ -279,7 +280,9 @@ async fn load(registry: &Registry<WriteLock>, max_collision_resolution_attempts:
         .load_record(
             &RecordPath::default(),
             RecordVersion(0),
-            max_collision_resolution_attempts,
+            LoadRecordOptions {
+                max_collision_resolution_attempts,
+            },
         )
         .await
         .unwrap()
