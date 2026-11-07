@@ -16,15 +16,18 @@ use crate::utils::serde::{BytesOrHexString, Secret};
 use casey::pascal;
 use coset::{CoseKey, cbor::tag};
 use derive_more::{Deref, DerefMut};
-use proptest::arbitrary::{Arbitrary, any};
-use proptest::collection::vec;
-use proptest::prop_compose;
-use proptest::strategy::{BoxedStrategy, Just, Strategy};
-use proptest_derive::Arbitrary;
+#[cfg(feature = "proptest")]
+use proptest::{
+    arbitrary::{Arbitrary, any},
+    collection::vec,
+    prop_compose,
+    strategy::{BoxedStrategy, Just, Strategy},
+};
 use rand::CryptoRng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Display;
+#[cfg(feature = "proptest")]
 use std::ops::{Add, RangeInclusive};
 use std::{
     fmt::Debug,
@@ -188,6 +191,7 @@ where
 {
 }
 
+#[cfg(feature = "proptest")]
 pub fn arb_config_param<P>(max: P::T) -> impl Strategy<Value = ConfigParam<P>>
 where
     P: ConfigParamTrait,
@@ -196,6 +200,7 @@ where
     (P::MIN..=max).prop_map(ConfigParam)
 }
 
+#[cfg(feature = "proptest")]
 impl<P> Arbitrary for ConfigParam<P>
 where
     P: ConfigParamTrait + 'static,
@@ -237,7 +242,8 @@ define_config_params! {
     segment_padding_to_bytes: u64 = 1024 >= 256,
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryConfigHash {
     pub algorithm: PasswordHashAlgorithm,
     pub output_length_in_bytes: ConfigParam<OutputLengthInBytes>, // TODO/FIXME: Bad type name
@@ -370,6 +376,7 @@ impl RegistryConfigKdf {
     }
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     fn arb_registry_config_kdf()(
         algorithm in any::<KdfAlgorithm>(),
@@ -393,6 +400,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "proptest")]
 impl Arbitrary for RegistryConfigKdf {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
@@ -402,7 +410,8 @@ impl Arbitrary for RegistryConfigKdf {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegistryConfig {
     pub hash: RegistryConfigHash,
     pub kdf: RegistryConfigKdf,

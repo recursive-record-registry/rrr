@@ -18,10 +18,8 @@ use coset::{
 };
 use derive_more::{Deref, DerefMut};
 use itertools::Itertools;
-use proptest::arbitrary::any;
-use proptest::collection::vec;
-use proptest::prop_compose;
-use proptest_derive::Arbitrary;
+#[cfg(feature = "proptest")]
+use proptest::{arbitrary::any, collection::vec, prop_compose};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::io::Cursor;
@@ -100,7 +98,8 @@ impl FragmentKey {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsage {
     Custom(BytesOrHexString<Vec<u8>>),
@@ -111,7 +110,8 @@ pub enum KdfUsage {
     },
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Arbitrary)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfUsageFragmentUsage {
     Custom(BytesOrHexString<Vec<u8>>),
@@ -120,7 +120,8 @@ pub enum KdfUsageFragmentUsage {
     FileTag {},
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct KdfUsageFragmentParameters {
     // Flattens fields of `RecordParameters` with the prefix `record_` prepended to each field.
     #[serde(flatten, with = "prefix_record")]
@@ -130,7 +131,8 @@ pub struct KdfUsageFragmentParameters {
 
 serde_with::with_prefix!(prefix_record "record_");
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop, Arbitrary)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RecordParameters {
     pub version: RecordVersion,
     pub collision_index: CollisionIndex,
@@ -141,7 +143,8 @@ newtype! {
         Records are made up of one or more segments/fragments.
         This number identifies a record's segments/fragments.
     "]
-    #[derive(Debug, Arbitrary)]
+    #[derive(Debug)]
+    #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
     pub SegmentIndex(pub u64);
 }
 
@@ -153,7 +156,8 @@ newtype! {
         from compromising confidentiality, but readers holding the earlier contents can tell
         that they changed, so publish a new version instead.
     "]
-    #[derive(Debug, Arbitrary)]
+    #[derive(Debug)]
+    #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
     pub RecordVersion(pub u64);
 }
 
@@ -166,7 +170,8 @@ newtype! {
         optimize record browsing, such that only the record with the lowest collision index is
         shown, and record fragments with higher collision indices are not even considered.
     "]
-    #[derive(Debug, Arbitrary)]
+    #[derive(Debug)]
+    #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
     pub CollisionIndex(pub u64);
 }
 
@@ -273,6 +278,7 @@ impl SegmentMetadata {
     }
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     pub fn arb_segment_metadata(
         kdf: &RegistryConfigKdf,
@@ -304,6 +310,7 @@ pub struct Segment {
     pub data: SegmentData,
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     pub fn arb_segment(
         kdf: &RegistryConfigKdf,
@@ -644,9 +651,10 @@ pub struct SegmentWithContext<'record> {
     pub context: SegmentContext,
 }
 
-#[derive(Debug, Clone, test_strategy::Arbitrary)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "proptest", derive(test_strategy::Arbitrary))]
 pub struct SegmentEncryption {
     pub algorithm: EncryptionAlgorithm,
-    #[strategy(256..=2048_u64)]
+    #[cfg_attr(feature = "proptest", strategy(256..=2048_u64))]
     pub padding_to_bytes: u64,
 }

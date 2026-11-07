@@ -39,6 +39,12 @@ Launch it by running the following:
     target/release/rrr
     ```
 
+## Cargo features
+* `cmd` -- the `rrr` command-line tool.
+* `proptest` -- [`proptest`](https://crates.io/crates/proptest) strategies and `Arbitrary`
+  implementations for the library's types, for property-based tests of crates that depend on
+  this one. This crate's own tests enable it automatically.
+
 ## TODO
 * [ ] Splitting records into multiple files.
     * [x] Basic library implementation
@@ -76,7 +82,7 @@ Launch it by running the following:
 * [ ] Use `cargo-mutants` to test proper handling and reporting of malformed data
 * [ ] Address the `unwrap` situation.
 * [ ] More granularity in errors.
-* [ ] Feature for proptest stuff
+* [x] Feature for proptest stuff
 * [ ] Consider making the encryption algorithm a config parameter
 * [ ] Register IANA CBOR tags for `registry.cbor`, record, segment and fragment. Files should have the
       form #6.55799(#MYTAG(_)), as per https://www.rfc-editor.org/rfc/rfc9277.html#section-2.2.1

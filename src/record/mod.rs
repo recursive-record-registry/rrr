@@ -6,16 +6,20 @@ use crate::registry::Registry;
 use crate::utils::fd_lock::{FileLock, WriteLock};
 use crate::utils::serde::{BytesOrAscii, BytesOrHexString, Secret};
 use async_fd_lock::LockWrite;
-use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
+#[cfg(feature = "proptest")]
+use chrono::NaiveDate;
+use chrono::{DateTime, FixedOffset, TimeZone};
 use coset::cbor::tag;
 use coset::cbor::value::Integer;
 use derive_more::{Deref, DerefMut};
-use futures::{pin_mut, Stream, StreamExt};
+use futures::{Stream, StreamExt, pin_mut};
 use itertools::Itertools;
-use proptest::arbitrary::Arbitrary;
-use proptest::prop_compose;
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
+#[cfg(feature = "proptest")]
+use proptest::{
+    arbitrary::Arbitrary,
+    prop_compose,
+    strategy::{BoxedStrategy, Strategy},
+};
 use segment::{
     CollisionIndex, FragmentFileNameBytes, FragmentKey, KdfUsageFragmentParameters,
     RecordParameters, RecordVersion, Segment, SegmentEncryption, SegmentMetadata,
@@ -27,7 +31,7 @@ use std::ops::{Deref, DerefMut};
 use std::{borrow::Cow, fmt::Debug, io::Cursor};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tracing::{debug, info, instrument, trace, warn, Level};
+use tracing::{Level, debug, info, instrument, trace, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub mod segment;
@@ -133,6 +137,7 @@ impl RecordMetadata {
 /// Generates date-times that are representable in the RFC 3339 format:
 /// years 0000 through 9999 (in both UTC and the local offset), offsets with minute precision,
 /// and no leap seconds.
+#[cfg(feature = "proptest")]
 fn arb_rfc3339_datetime() -> impl Strategy<Value = DateTime<FixedOffset>> {
     const MAX_OFFSET_MINUTES: i32 = 24 * 60 - 1;
     // Keep a day of margin on both ends, so that applying the offset does not leave the range.
@@ -160,6 +165,7 @@ fn arb_rfc3339_datetime() -> impl Strategy<Value = DateTime<FixedOffset>> {
         })
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     fn arb_record_metadata()(
         created_at in proptest::option::of(arb_rfc3339_datetime()),
@@ -174,6 +180,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "proptest")]
 impl Arbitrary for RecordMetadata {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
@@ -189,7 +196,8 @@ pub type RecordData = BytesOrAscii<Vec<u8>, 32>;
 pub(crate) struct RecordSerde<'a>(Cow<'a, RecordMetadata>, Cow<'a, RecordData>);
 
 /// A record, loaded from its CBOR representation.
-#[derive(Arbitrary, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Record {
     pub metadata: RecordMetadata,
     pub data: RecordData,

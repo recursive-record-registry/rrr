@@ -10,6 +10,7 @@ use ed25519_dalek::{
     },
 };
 use itertools::Itertools;
+#[cfg(feature = "proptest")]
 use proptest::{
     arbitrary::{any, Arbitrary},
     prop_compose, prop_oneof,
@@ -149,6 +150,7 @@ impl Debug for SigningKey {
     }
 }
 
+#[cfg(feature = "proptest")]
 fn arb_signing_key() -> impl Strategy<Value = SigningKey> {
     prop_oneof![
         proptest::array::uniform(any::<u8>()).prop_map(|bytes| SigningKey::Ed25519(Secret(
@@ -157,6 +159,7 @@ fn arb_signing_key() -> impl Strategy<Value = SigningKey> {
     ]
 }
 
+#[cfg(feature = "proptest")]
 impl Arbitrary for SigningKey {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
@@ -204,12 +207,14 @@ impl VerifyingKey {
     }
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     fn arb_verifying_key()(signing_key in any::<SigningKey>()) -> VerifyingKey {
         VerifyingKey::from(&signing_key)
     }
 }
 
+#[cfg(feature = "proptest")]
 impl Arbitrary for VerifyingKey {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;

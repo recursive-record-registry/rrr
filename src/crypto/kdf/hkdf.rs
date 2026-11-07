@@ -1,5 +1,4 @@
 use ::hkdf::Hkdf;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Sha512};
 
@@ -7,7 +6,8 @@ use crate::error::Result;
 
 use super::Kdf;
 
-#[derive(Arbitrary, Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HkdfPrf {
     #[default]
@@ -15,7 +15,8 @@ pub enum HkdfPrf {
     Sha512,
 }
 
-#[derive(Arbitrary, Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HkdfParams {
     /// Underlying pseudo-random function.
     pub prf: HkdfPrf,

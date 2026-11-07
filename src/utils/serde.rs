@@ -9,11 +9,11 @@ use std::{
 use derive_more::{Deref, DerefMut, From};
 use hex_buffer_serde::{ConstHex, Hex};
 use itertools::Itertools;
+#[cfg(feature = "proptest")]
 use proptest::{
     arbitrary::Arbitrary,
     strategy::{BoxedStrategy, Strategy},
 };
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, SerializeAs};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -166,6 +166,7 @@ where
     }
 }
 
+#[cfg(feature = "proptest")]
 impl<T, E> Arbitrary for BytesOrHexString<T, E>
 where
     T: AsRef<[u8]> + for<'a> TryFrom<&'a [u8], Error = E> + Arbitrary,
@@ -258,8 +259,8 @@ where
     }
 }
 
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Serialize,
@@ -326,8 +327,8 @@ where
 }
 
 /// A wrapper with a custom [`Display`] and [`Debug`] implementation to hide the underlying data.
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 #[derive(
-    Arbitrary,
     Clone,
     Default,
     Deref,
@@ -363,8 +364,8 @@ where
     }
 }
 
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 #[derive(
-    Arbitrary,
     Clone,
     Default,
     Deref,

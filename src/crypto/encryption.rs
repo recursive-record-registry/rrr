@@ -8,11 +8,11 @@ use aes_gcm_siv::{
     Aes256GcmSiv, KeyInit,
     aead::{Aead, Payload},
 };
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 // TODO: Incomplete implementation
-#[derive(Arbitrary, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EncryptionAlgorithm {
     /// AES-256-GCM-SIV, as specified in [RFC 8452](https://www.rfc-editor.org/rfc/rfc8452).
     ///

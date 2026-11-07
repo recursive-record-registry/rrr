@@ -1,10 +1,10 @@
 use crate::utils::serde::{BytesOrHexString, Secret};
+#[cfg(feature = "proptest")]
 use proptest::{
     arbitrary::{Arbitrary, any},
     prop_compose,
     strategy::{BoxedStrategy, Just, Strategy},
 };
-use proptest_derive::Arbitrary;
 use std::fmt::Debug;
 
 use crate::error::Result;
@@ -14,7 +14,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::PasswordHash;
 
-#[derive(Arbitrary, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Variant {
     // #[serde(rename = "argon2d")]
@@ -87,6 +88,7 @@ impl PasswordHash for Argon2Params {
     }
 }
 
+#[cfg(feature = "proptest")]
 prop_compose! {
     fn arb_hash_params(log_max_cost: u32)(
         t_cost in 1_u32..(1 << log_max_cost),
@@ -108,6 +110,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "proptest")]
 impl Arbitrary for Argon2Params {
     type Parameters = ();
     type Strategy = BoxedStrategy<Argon2Params>;

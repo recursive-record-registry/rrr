@@ -5,7 +5,6 @@
 //! the KDF.
 
 use hkdf::HkdfParams;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::{cbor::SerializeExt, error::Result};
@@ -16,7 +15,8 @@ pub trait Kdf {
     fn derive_key(&self, ikm: &[u8], info: &[u8], okm: &mut [u8]) -> Result<()>;
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KdfAlgorithm {
     Hkdf(HkdfParams),
